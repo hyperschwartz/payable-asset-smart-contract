@@ -15,3 +15,5 @@ artifacts
 # IDE stuff
 /.vscode/
 /.idea/
+
+*.iml
