@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128,
 };
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg};
 
@@ -22,13 +22,22 @@ pub fn instantiate(
 
     // Create and save contract config state. The name is used for setting attributes on user accounts
     config(deps.storage).save(&State {
-        name: msg.name.clone(),
-        fee_amount: msg.fee_amount.clone(),
-        fee_collection_address: msg.fee_collection_address.clone(),
+        contract_name: msg.contract_name.clone(),
+        onboarding_cost: Uint128::new(msg.onboarding_cost.as_str().parse::<u128>().unwrap()),
+        onboarding_denom: msg.onboarding_denom.clone(),
+        fee_collection_address: deps
+            .api
+            .addr_validate(msg.fee_collection_address.as_str())?,
+        fee_percent: msg.fee_percent,
+        oracle_address: deps.api.addr_validate(msg.oracle_address.as_str())?,
     })?;
 
     // Create a message that will bind a restricted name to the contract address.
-    let bind_name_msg = bind_name(&msg.name, env.contract.address, NameBinding::Restricted)?;
+    let bind_name_msg = bind_name(
+        &msg.contract_name,
+        env.contract.address,
+        NameBinding::Restricted,
+    )?;
 
     // Dispatch messages and emit event attributes
     Ok(Response::new()
@@ -70,7 +79,7 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::testing::{mock_env, mock_info};
-    use cosmwasm_std::{from_binary, CosmosMsg};
+    use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{NameMsgParams, ProvenanceMsgParams};
 
@@ -85,9 +94,12 @@ mod tests {
             mock_env(),
             mock_info("admin", &[]),
             InitMsg {
-                name: "wallet.pb".into(),
-                fee_amount: "100000000000".into(),
-                fee_collection_address: "tp123".into(),
+                contract_name: "payables.asset".into(),
+                onboarding_cost: "150".into(),
+                onboarding_denom: "nhash".into(),
+                fee_collection_address: "feebucket".into(),
+                fee_percent: Decimal::percent(75),
+                oracle_address: "matt".into(),
             },
         )
         .unwrap();
@@ -97,7 +109,7 @@ mod tests {
         match &res.messages[0].msg {
             CosmosMsg::Custom(msg) => match &msg.params {
                 ProvenanceMsgParams::Name(p) => match &p {
-                    NameMsgParams::BindName { name, .. } => assert_eq!(name, "wallet.pb"),
+                    NameMsgParams::BindName { name, .. } => assert_eq!(name, "payables.asset"),
                     _ => panic!("unexpected name params"),
                 },
                 _ => panic!("unexpected provenance params"),
@@ -117,9 +129,12 @@ mod tests {
             mock_env(),
             mock_info("feebucket", &[]),
             InitMsg {
-                name: "wallet.pb".into(),
-                fee_amount: "100000000000".into(),
-                fee_collection_address: "tp123".into(),
+                contract_name: "payables.asset".into(),
+                onboarding_cost: "150".into(),
+                onboarding_denom: "nhash".into(),
+                fee_collection_address: "feebucket".into(),
+                fee_percent: Decimal::percent(75),
+                oracle_address: "matt".into(),
             },
         )
         .unwrap(); // Panics on error
@@ -129,6 +144,6 @@ mod tests {
         let resp: QueryResponse = from_binary(&bin).unwrap();
 
         // Ensure the expected init fields were properly stored.
-        assert_eq!(resp.name, "wallet.pb");
+        assert_eq!(resp.contract_name, "payables.asset");
     }
 }

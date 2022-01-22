@@ -1,3 +1,4 @@
+use cosmwasm_std::Decimal;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -6,9 +7,18 @@ use crate::state::State;
 /// A message sent to initialize the contract state.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
-    pub name: String,
-    pub fee_amount: String,
+    // Name of the contract that is tagged on various things
+    pub contract_name: String,
+    // Cost to onboard each payable
+    pub onboarding_cost: String,
+    // Coin type for onboarding charge
+    pub onboarding_denom: String,
+    // The address that will collect onboarding fees
     pub fee_collection_address: String,
+    // Percentage of each transaction that is taken as fee
+    pub fee_percent: Decimal,
+    // Address of the oracle application that can withdraw excess fees after fee percent is removed from onboarding_cost
+    pub oracle_address: String,
 }
 
 /// A message sent to register a name with the name service
