@@ -158,7 +158,17 @@ fn validate_fee_params_get_messages(
         .into_iter()
         .find(|coin| coin.denom == state.onboarding_denom)
     {
-        Some(coin) => coin.amount,
+        Some(coin) => {
+            let amount_sent = coin.amount;
+            if onboarding_cost > amount_sent {
+                return Err(ContractError::InsufficientFundsProvided {
+                    amount_needed: onboarding_cost.u128(),
+                    amount_provided: amount_sent.u128(),
+                });
+            } else {
+                amount_sent
+            }
+        }
         None => {
             if onboarding_cost.u128() > 0 {
                 return Err(ContractError::NoFundsProvided {
@@ -169,12 +179,6 @@ fn validate_fee_params_get_messages(
             }
         }
     };
-    if onboarding_cost < funds_sent {
-        return Err(ContractError::InsufficientFundsProvided {
-            amount_needed: onboarding_cost.u128(),
-            amount_provided: funds_sent.u128(),
-        });
-    }
     // The collected fee is the fee percent * the onboarding cost.  The remaining amount will stay in
     // the contract's account, waiting for the oracle to withdraw it
     let fee_collected_amount = onboarding_cost.mul(state.fee_percent);
@@ -353,33 +357,31 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_register_no_refund() {
+    fn test_register_valid_no_refund() {
         let mut deps = mock_dependencies(&[]);
-
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-
         let scope_id = "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".to_string();
         let owner_address = "owner_person".to_string();
-
         // Dupe the querier to respond with a scope that will pass validation
-        deps.querier.with_scope(Scope {
-            scope_id: scope_id.clone(),
-            specification_id: "spec".into(),
-            owners: vec![Party {
-                address: owner_address.clone(),
-                role: PartyType::Owner,
-            }],
-            data_access: vec!(),
-            value_owner_address: owner_address.clone(),
-        });
-
+        deps.querier.with_scope(get_duped_scope(
+            scope_id.clone(),
+            "spec".into(),
+            owner_address.clone(),
+        ));
         let response = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("owner_person", &[coin(100, "nhash".to_string())]),
-            ExecuteMsg::RegisterScope { scope_id: "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".into() },
-        ).unwrap();
-        assert_eq!(2, response.messages.len(), "expected two messages to be contained in the payload");
+            mock_info(owner_address.as_str(), &[coin(100, "nhash".to_string())]),
+            ExecuteMsg::RegisterScope {
+                scope_id: scope_id.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            2,
+            response.messages.len(),
+            "expected two messages to be contained in the payload"
+        );
         response.messages.into_iter().for_each(|msg| match msg.msg {
             CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
                 match params {
@@ -410,6 +412,199 @@ mod tests {
             },
             _ => panic!("unexpected response message type"),
         });
+    }
+
+    #[test]
+    fn test_register_valid_with_refund() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        let scope_id = "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".to_string();
+        let owner_address = "owner_person".to_string();
+        // Dupe the querier to respond with a scope that will pass validation
+        deps.querier.with_scope(get_duped_scope(
+            scope_id.clone(),
+            "spec".into(),
+            owner_address.clone(),
+        ));
+        let response = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(owner_address.as_str(), &[coin(150, "nhash".to_string())]),
+            ExecuteMsg::RegisterScope {
+                scope_id: scope_id.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            3,
+            response.messages.len(),
+            "expected three messages to be contained in the payload"
+        );
+        response.messages.into_iter().for_each(|msg| match msg.msg {
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                                                       name,
+                                                       value,
+                                                       value_type,
+                                                       ..
+                                                   }) => {
+                        assert_eq!("payables.asset".to_string(), name, "expected the registered attribute name to be the contract name");
+                        assert_eq!(
+                            scope_id.clone(),
+                            from_binary::<String>(&value)
+                                .expect("unable to deserialize value from result"),
+                            "expected the registered value to the scope uuid",
+                        );
+                        assert_eq!(AttributeValueType::String, value_type, "expected the value type to be stored as a string");
+                    }
+                    _ => panic!("unexpected provenance message type contaiend in result"),
+                }
+            },
+            CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+                assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
+                let coin = amount.first().unwrap();
+                match to_address.as_str() {
+                    "feebucket" => {
+                        assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
+                        assert_eq!("nhash", coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
+                    },
+                    "owner_person" => {
+                        assert_eq!(50, coin.amount.u128(), "expected the overage amount to be refunded to the sender");
+                        assert_eq!("nhash", coin.denom.as_str(), "expected the refund's denomination to equate to the contract's specified denomination");
+                    },
+                    _ => panic!("unexpected address for bank message send"),
+                }
+            },
+            _ => panic!("unexpected response message type"),
+        });
+    }
+
+    #[test]
+    fn test_register_invalid_sender_for_scope() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        let scope_id = "rando-id".to_string();
+        let owner_address = "owner_person".to_string();
+        deps.querier.with_scope(get_duped_scope(
+            scope_id.clone(),
+            "spec".into(),
+            "wrong_owner_address".into(),
+        ));
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(owner_address.as_str(), &[coin(100, "nhash".to_string())]),
+            ExecuteMsg::RegisterScope {
+                scope_id: scope_id.clone(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(failure, ContractError::Unauthorized),
+            "expected a mismatched owner address on the scope to be met with an unauthorized error",
+        );
+    }
+
+    #[test]
+    fn test_register_invalid_fund_denom() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier.with_scope(get_duped_scope(
+            "scope-id".into(),
+            "spec-id".into(),
+            "owner-address".into(),
+        ));
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("owner-address", &[coin(100, "nothash".to_string())]),
+            ExecuteMsg::RegisterScope {
+                scope_id: "scope-id".into(),
+            },
+        )
+        .unwrap_err();
+        match failure {
+            ContractError::InvalidFundsProvided {
+                valid_denom,
+                invalid_denoms,
+            } => {
+                assert_eq!(
+                    "nhash", valid_denom,
+                    "expected the valid denomination returned to be the default value"
+                );
+                assert_eq!(
+                    1,
+                    invalid_denoms.len(),
+                    "expected the one invalid value to be returned"
+                );
+                let invalid_denom = invalid_denoms.first().unwrap();
+                assert_eq!("nothash", invalid_denom.as_str(), "expected the invalid denomination returned to be a reflection of the bad input");
+            }
+            _ => panic!("unexpected contract error encountered"),
+        };
+    }
+
+    #[test]
+    fn test_register_no_funds_provided_and_fee_charge_non_zero() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier.with_scope(get_duped_scope(
+            "scope-id".into(),
+            "spec-id".into(),
+            "owner-address".into(),
+        ));
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("owner-address", &[]),
+            ExecuteMsg::RegisterScope {
+                scope_id: "scope-id".into(),
+            },
+        )
+        .unwrap_err();
+        match failure {
+            ContractError::NoFundsProvided { valid_denom } => {
+                assert_eq!(
+                    "nhash", valid_denom,
+                    "the error should reflect the desired fund type"
+                );
+            }
+            _ => panic!("unexpected contract error encountered"),
+        };
+    }
+
+    #[test]
+    fn test_register_insufficient_funds_provided() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier.with_scope(get_duped_scope(
+            "scope-id".into(),
+            "spec-id".into(),
+            "owner-address".into(),
+        ));
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("owner-address", &[coin(99, "nhash".to_string())]),
+            ExecuteMsg::RegisterScope {
+                scope_id: "scope-id".into(),
+            },
+        )
+        .unwrap_err();
+        match failure {
+            ContractError::InsufficientFundsProvided {
+                amount_needed,
+                amount_provided,
+            } => {
+                assert_eq!(
+                    100, amount_needed,
+                    "expected the amount needed to reflect the default value"
+                );
+                assert_eq!(99, amount_provided, "expected the amount provided to reflect the amount provided when the contract was executed");
+            }
+            _ => panic!("unexpected contract error encountered"),
+        };
     }
 
     struct InstArgs {
@@ -463,5 +658,19 @@ mod tests {
                 oracle_address: args.oracle_address,
             },
         )
+    }
+
+    /// Dupes the querier to respond with the given information when a scope is requested.
+    fn get_duped_scope(scope_id: String, specification_id: String, owner_address: String) -> Scope {
+        Scope {
+            scope_id: scope_id.clone(),
+            specification_id: specification_id.clone(),
+            owners: vec![Party {
+                address: owner_address.clone(),
+                role: PartyType::Owner,
+            }],
+            data_access: vec![],
+            value_owner_address: owner_address.clone(),
+        }
     }
 }
