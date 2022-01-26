@@ -220,7 +220,7 @@ mod tests {
     use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
-    use provwasm_std::{NameMsgParams, ProvenanceMsgParams, Scope};
+    use provwasm_std::{AttributeMsgParams, NameMsgParams, Party, ProvenanceMsgParams, Scope};
 
     #[test]
     fn test_valid_init() {
@@ -345,7 +345,7 @@ mod tests {
 
         // Ensure the expected init fields were properly stored.
         assert_eq!("payables.asset", resp.contract_name);
-        assert_eq!(Uint128::new(150), resp.onboarding_cost);
+        assert_eq!(Uint128::new(100), resp.onboarding_cost);
         assert_eq!("nhash", resp.onboarding_denom.as_str());
         assert_eq!("feebucket", resp.fee_collection_address.as_str());
         assert_eq!(Decimal::percent(75), resp.fee_percent);
@@ -353,20 +353,63 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_register() {
+    fn test_valid_register_no_refund() {
         let mut deps = mock_dependencies(&[]);
 
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
 
-        // TODO: Register mock scope before request
-        // deps.querier.with_scope()
+        let scope_id = "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".to_string();
+        let owner_address = "owner_person".to_string();
 
-        // execute(
-        //     deps.as_mut(),
-        //     mock_env(),
-        //     mock_info("admin", &[]),
-        //     ExecuteMsg::RegisterScope { scope_id: "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".into() },
-        // ).unwrap();
+        // Dupe the querier to respond with a scope that will pass validation
+        deps.querier.with_scope(Scope {
+            scope_id: scope_id.clone(),
+            specification_id: "spec".into(),
+            owners: vec![Party {
+                address: owner_address.clone(),
+                role: PartyType::Owner,
+            }],
+            data_access: vec!(),
+            value_owner_address: owner_address.clone(),
+        });
+
+        let response = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("owner_person", &[coin(100, "nhash".to_string())]),
+            ExecuteMsg::RegisterScope { scope_id: "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".into() },
+        ).unwrap();
+        assert_eq!(2, response.messages.len(), "expected two messages to be contained in the payload");
+        response.messages.into_iter().for_each(|msg| match msg.msg {
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name,
+                        value,
+                        value_type,
+                        ..
+                    }) => {
+                        assert_eq!("payables.asset".to_string(), name, "expected the registered attribute name to be the contract name");
+                        assert_eq!(
+                            scope_id.clone(),
+                            from_binary::<String>(&value)
+                                .expect("unable to deserialize value from result"),
+                            "expected the registered value to the scope uuid",
+                        );
+                        assert_eq!(AttributeValueType::String, value_type, "expected the value type to be stored as a string");
+                    }
+                    _ => panic!("unexpected provenance message type contaiend in result"),
+                }
+            },
+            CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+                assert_eq!("feebucket", to_address, "expected the fee send to go the default fee collection address");
+                assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
+                let coin = amount.first().unwrap();
+                assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
+                assert_eq!("nhash", coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
+            },
+            _ => panic!("unexpected response message type"),
+        });
     }
 
     struct InstArgs {
@@ -386,7 +429,7 @@ mod tests {
                 env: mock_env(),
                 info: mock_info("admin", &[]),
                 contract_name: "payables.asset".into(),
-                onboarding_cost: "150".into(),
+                onboarding_cost: "100".into(),
                 onboarding_denom: "nhash".into(),
                 fee_collection_address: "feebucket".into(),
                 fee_percent: Decimal::percent(75),
