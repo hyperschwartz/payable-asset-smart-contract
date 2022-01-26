@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    coin, to_binary, BankMsg, Binary, CosmosMsg, Deps, DepsMut, Env, MessageInfo, Response,
-    StdError, StdResult, Uint128,
+    coin, to_binary, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo,
+    Response, StdError, StdResult, Uint128,
 };
 use provwasm_std::{
     add_attribute, bind_name, AttributeValueType, NameBinding, PartyType, ProvenanceMsg,
@@ -9,6 +9,7 @@ use provwasm_std::{
 use std::ops::Mul;
 
 use crate::error::ContractError;
+use crate::helper::to_percent;
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::state::{config, config_read, State};
 
@@ -23,6 +24,13 @@ pub fn instantiate(
     if !info.funds.is_empty() {
         let err = "purchase funds are not allowed to be sent during init";
         return Err(StdError::generic_err(err));
+    }
+
+    if msg.fee_percent > Decimal::one() {
+        return Err(StdError::generic_err(format!(
+            "fee [{}%] must be less than 100%",
+            to_percent(msg.fee_percent)
+        )));
     }
 
     // Create and save contract config state. The name is used for setting attributes on user accounts
@@ -64,25 +72,23 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 /// Handle purchase messages.
 pub fn execute(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     match msg {
-        ExecuteMsg::RegisterScope { scope_id } => register_scope(deps, env, info, scope_id),
+        ExecuteMsg::RegisterScope { scope_id } => register_scope(deps, info, scope_id),
     }
 }
 
 fn register_scope(
     deps: DepsMut,
-    _env: Env,
     info: MessageInfo,
     scope_id: String,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     let state = config(deps.storage).load()?;
     let querier = ProvenanceQuerier::new(&deps.querier);
     let scope = querier.get_scope(scope_id.clone())?;
-    // Verify that the address in the request is an owner of this scope
     if !scope
         .owners
         .into_iter()
@@ -95,7 +101,7 @@ fn register_scope(
         deps.api.addr_validate(&scope_id)?,
         // Use the contract name as the tag
         state.contract_name.clone(),
-        // TODO: Maybe don't use the scope id as the value of the attribute. Something more useufl will likely present its as development continues
+        // TODO: Maybe don't use the scope id as the value of the attribute. Something more useful will likely present its as development continues
         to_binary(&scope_id)?,
         AttributeValueType::String,
     )?;
@@ -214,10 +220,10 @@ mod tests {
     use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
-    use provwasm_std::{NameMsgParams, ProvenanceMsgParams};
+    use provwasm_std::{NameMsgParams, ProvenanceMsgParams, Scope};
 
     #[test]
-    fn valid_init() {
+    fn test_valid_init() {
         // Create mocks
         let mut deps = mock_dependencies(&[]);
 
@@ -225,6 +231,12 @@ mod tests {
         let res = test_instantiate(
             deps.as_mut(),
             InstArgs {
+                contract_name: "payables.asset".into(),
+                onboarding_cost: "420".into(),
+                onboarding_denom: "usdf".into(),
+                fee_collection_address: "test-address".into(),
+                fee_percent: Decimal::percent(50),
+                oracle_address: "oracle".into(),
                 ..Default::default()
             },
         )
@@ -242,27 +254,119 @@ mod tests {
             },
             _ => panic!("unexpected cosmos message"),
         }
+        let generated_state = config(deps.as_mut().storage).load().unwrap();
+        assert_eq!(
+            "payables.asset",
+            generated_state.contract_name.as_str(),
+            "expected state to include the proper contract name",
+        );
+        assert_eq!(
+            Uint128::new(420),
+            generated_state.onboarding_cost,
+            "expected state to include the proper onboarding cost",
+        );
+        assert_eq!(
+            "usdf",
+            generated_state.onboarding_denom.as_str(),
+            "expected state to include the proper onboarding denom",
+        );
+        assert_eq!(
+            "test-address",
+            generated_state.fee_collection_address.as_str(),
+            "expected state to include the proper fee collection address",
+        );
+        assert_eq!(
+            Decimal::percent(50),
+            generated_state.fee_percent,
+            "expected state to include the proper fee percent",
+        );
+        assert_eq!(
+            "oracle",
+            generated_state.oracle_address.as_str(),
+            "expected state to include the proper oracle address",
+        );
     }
 
     #[test]
-    fn query_test() {
-        // Create mocks
+    fn test_invalid_init_funds_provided() {
         let mut deps = mock_dependencies(&[]);
-
-        test_instantiate(
+        let err = test_instantiate(
             deps.as_mut(),
             InstArgs {
+                info: mock_info("sender", &vec![coin(50, "nhash")]),
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap_err();
+        match err {
+            StdError::GenericErr { msg, .. } => {
+                assert_eq!(
+                    "purchase funds are not allowed to be sent during init",
+                    msg.as_str(),
+                    "unexpected error message during fund failure",
+                )
+            }
+            _ => panic!("unexpected error encountered when funds provided"),
+        };
+    }
+
+    #[test]
+    fn test_invalid_init_too_high_fee_percent() {
+        let mut deps = mock_dependencies(&[]);
+        let err = test_instantiate(
+            deps.as_mut(),
+            InstArgs {
+                fee_percent: Decimal::percent(101),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        match err {
+            StdError::GenericErr { msg, .. } => {
+                assert_eq!(
+                    "fee [101%] must be less than 100%", msg,
+                    "unexpected error message during bad fee percent provided",
+                )
+            }
+            _ => panic!("unexpected error encountered when too high fee percent provided"),
+        };
+    }
+
+    #[test]
+    fn test_query() {
+        // Create mocks
+        let mut deps = mock_dependencies(&[]);
+
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
 
         // Call the smart contract query function to get stored state.
         let bin = query(deps.as_ref(), mock_env(), QueryMsg::QueryRequest {}).unwrap();
         let resp: QueryResponse = from_binary(&bin).unwrap();
 
         // Ensure the expected init fields were properly stored.
-        assert_eq!(resp.contract_name, "payables.asset");
+        assert_eq!("payables.asset", resp.contract_name);
+        assert_eq!(Uint128::new(150), resp.onboarding_cost);
+        assert_eq!("nhash", resp.onboarding_denom.as_str());
+        assert_eq!("feebucket", resp.fee_collection_address.as_str());
+        assert_eq!(Decimal::percent(75), resp.fee_percent);
+        assert_eq!("matt", resp.oracle_address.as_str());
+    }
+
+    #[test]
+    fn test_valid_register() {
+        let mut deps = mock_dependencies(&[]);
+
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+
+        // TODO: Register mock scope before request
+        // deps.querier.with_scope()
+
+        // execute(
+        //     deps.as_mut(),
+        //     mock_env(),
+        //     mock_info("admin", &[]),
+        //     ExecuteMsg::RegisterScope { scope_id: "8fa88d64-7ed7-11ec-a2df-abe6f9c86f86".into() },
+        // ).unwrap();
     }
 
     struct InstArgs {
@@ -287,6 +391,14 @@ mod tests {
                 fee_collection_address: "feebucket".into(),
                 fee_percent: Decimal::percent(75),
                 oracle_address: "matt".into(),
+            }
+        }
+    }
+
+    impl InstArgs {
+        fn default() -> InstArgs {
+            InstArgs {
+                ..Default::default()
             }
         }
     }
