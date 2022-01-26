@@ -6,11 +6,19 @@
     {
       "type": "object",
       "required": [
-        "do_nothing"
+        "register_scope"
       ],
       "properties": {
-        "do_nothing": {
-          "type": "object"
+        "register_scope": {
+          "type": "object",
+          "required": [
+            "scope_id"
+          ],
+          "properties": {
+            "scope_id": {
+              "type": "string"
+            }
+          }
         }
       },
       "additionalProperties": false

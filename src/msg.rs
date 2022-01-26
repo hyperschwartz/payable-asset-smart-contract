@@ -25,8 +25,7 @@ pub struct InitMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    // TODO: Actual execution
-    DoNothing {},
+    RegisterScope { scope_id: String },
 }
 
 /// A message sent to query contract config state.
