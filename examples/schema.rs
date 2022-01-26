@@ -3,9 +3,7 @@ use std::fs::create_dir_all;
 
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 
-use invoice_validator_smart_contract::msg::{
-    ExecuteMsg, InitMsg, MigrateMsg, QueryMsg, QueryResponse,
-};
+use payable_asset_smart_contract::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg, QueryResponse};
 
 fn main() {
     let mut out_dir = current_dir().unwrap();
