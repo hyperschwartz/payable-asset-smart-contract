@@ -12,7 +12,9 @@ use crate::error::ContractError;
 use crate::helper::{to_percent, CONTRACT_MARKER_PERMISSIONS, SENDER_MARKER_PERMISSIONS};
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::register_payable::RegisterPayableMarkerV1;
-use crate::state::{config, config_read, payable_meta_storage, PayableMeta, State};
+use crate::state::{
+    config, config_read, payable_meta_storage, payable_meta_storage_read, PayableMeta, State,
+};
 
 /// Initialize the contract
 pub fn instantiate(
@@ -62,9 +64,15 @@ pub fn instantiate(
 /// Query contract state.
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::QueryRequest {} => {
+        QueryMsg::QueryState {} => {
             let state = config_read(deps.storage).load()?;
             let json = to_binary(&state)?;
+            Ok(json)
+        }
+        QueryMsg::QueryPayable { marker_denom } => {
+            let meta_storage = payable_meta_storage_read(deps.storage);
+            let payable_meta = meta_storage.load(marker_denom.as_bytes())?;
+            let json = to_binary(&payable_meta)?;
             Ok(json)
         }
     }
@@ -259,8 +267,8 @@ fn validate_fee_params_get_messages(
     Ok(FeeChargeResponse {
         fee_charge_message,
         fee_refund_message,
-        refund_amount: 69,
-        oracle_fee_amount_kept: 420,
+        refund_amount: refund_amount.u128(),
+        oracle_fee_amount_kept: (funds_sent - onboarding_cost).u128(),
     })
 }
 
@@ -279,9 +287,19 @@ mod tests {
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{AttributeMsgParams, MarkerMsgParams, NameMsgParams, ProvenanceMsgParams};
 
+    const DEFAULT_INFO_NAME: &str = "admin";
+    const DEFAULT_CONTRACT_NAME: &str = "payables.asset";
+    const DEFAULT_ONBOARDING_COST: &str = "100";
+    const DEFAULT_ONBOARDING_DENOM: &str = "nhash";
+    const DEFAULT_FEE_COLLECTION_ADDRESS: &str = "feebucket";
+    const DEFAULT_FEE_PERCENT: u64 = 75;
+    const DEFAULT_ORACLE_ADDRESS: &str = "matt";
     const DEFAULT_MARKER_ADDRESS: &str = "tp1cf4n639gawu07wmspwpg9wkry0zn6vhdppcnrv";
     const DEFAULT_MARKER_DENOM: &str = "invoice-480d2352-7af8-11ec-88fb-9f79ab0248a0";
     const DEFAULT_SCOPE_ID: &str = "scope1qpyq6g6j0tuprmyglw0hn2czfzsq6fcyl8";
+    const DEFAULT_PAYABLE_DENOM: &str = "nhash";
+    const DEFAULT_PAYABLE_TOTAL: u128 = 10000;
+    const MOCK_COSMOS_CONTRACT_ADDRESS: &str = "cosmos2contract";
 
     #[test]
     fn test_valid_init() {
@@ -354,7 +372,7 @@ mod tests {
         let err = test_instantiate(
             deps.as_mut(),
             InstArgs {
-                info: mock_info("sender", &vec![coin(50, "nhash")]),
+                info: mock_info("sender", &vec![coin(50, DEFAULT_ONBOARDING_DENOM)]),
                 ..Default::default()
             },
         )
@@ -401,27 +419,32 @@ mod tests {
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
 
         // Call the smart contract query function to get stored state.
-        let bin = query(deps.as_ref(), mock_env(), QueryMsg::QueryRequest {}).unwrap();
+        let bin = query(deps.as_ref(), mock_env(), QueryMsg::QueryState {}).unwrap();
         let resp: QueryResponse = from_binary(&bin).unwrap();
 
         // Ensure the expected init fields were properly stored.
-        assert_eq!("payables.asset", resp.contract_name);
+        assert_eq!(DEFAULT_CONTRACT_NAME, resp.contract_name);
         assert_eq!(Uint128::new(100), resp.onboarding_cost);
-        assert_eq!("nhash", resp.onboarding_denom.as_str());
-        assert_eq!("feebucket", resp.fee_collection_address.as_str());
-        assert_eq!(Decimal::percent(75), resp.fee_percent);
-        assert_eq!("matt", resp.oracle_address.as_str());
+        assert_eq!(DEFAULT_ONBOARDING_DENOM, resp.onboarding_denom.as_str());
+        assert_eq!(
+            DEFAULT_FEE_COLLECTION_ADDRESS,
+            resp.fee_collection_address.as_str()
+        );
+        assert_eq!(Decimal::percent(DEFAULT_FEE_PERCENT), resp.fee_percent);
+        assert_eq!(DEFAULT_ORACLE_ADDRESS, resp.oracle_address.as_str());
     }
 
     #[test]
     fn test_register_valid_no_refund() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let owner_address = "owner_person".to_string();
         let response = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info(owner_address.as_str(), &[coin(100, "nhash".to_string())]),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
             default_register_payable(),
         )
         .unwrap();
@@ -443,11 +466,11 @@ mod tests {
                         assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
                         match address.as_str() {
                             // Declared at the beginning for the contract address
-                            "owner_person" => {
+                            DEFAULT_INFO_NAME => {
                                 assert_eq!(SENDER_MARKER_PERMISSIONS.to_vec(), permissions);
                             },
                             // mock_env() creates this as the default contract address
-                            "cosmos2contract" => {
+                            MOCK_COSMOS_CONTRACT_ADDRESS => {
                                 assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
                             },
                             _ => panic!("unexpected address encountered"),
@@ -459,7 +482,7 @@ mod tests {
                         value_type,
                         ..
                     }) => {
-                        assert_eq!("payables.asset".to_string(), name, "expected the registered attribute name to be the contract name");
+                        assert_eq!(DEFAULT_CONTRACT_NAME, name.as_str(), "expected the registered attribute name to be the contract name");
                         assert_eq!(
                             DEFAULT_SCOPE_ID.to_string(),
                             from_binary::<String>(&value)
@@ -478,11 +501,11 @@ mod tests {
                 }
             },
             CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-                assert_eq!("feebucket", to_address, "expected the fee send to go the default fee collection address");
+                assert_eq!(DEFAULT_FEE_COLLECTION_ADDRESS, to_address, "expected the fee send to go the default fee collection address");
                 assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
                 let coin = amount.first().unwrap();
                 assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
-                assert_eq!("nhash", coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
+                assert_eq!(DEFAULT_ONBOARDING_DENOM, coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
             },
             _ => panic!("unexpected response message type"),
         });
@@ -492,11 +515,13 @@ mod tests {
     fn test_register_valid_with_refund() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let owner_address = "owner_person".to_string();
         let response = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info(owner_address.as_str(), &[coin(150, "nhash".to_string())]),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(150, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
             default_register_payable(),
         )
         .unwrap();
@@ -518,11 +543,11 @@ mod tests {
                         assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
                         match address.as_str() {
                             // Declared at the beginning for the contract address
-                            "owner_person" => {
+                            DEFAULT_INFO_NAME => {
                                 assert_eq!(SENDER_MARKER_PERMISSIONS.to_vec(), permissions);
                             },
                             // mock_env() creates this as the default contract address
-                            "cosmos2contract" => {
+                            MOCK_COSMOS_CONTRACT_ADDRESS => {
                                 assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
                             },
                             _ => panic!("unexpected address encountered"),
@@ -534,7 +559,7 @@ mod tests {
                                                        value_type,
                                                        ..
                                                    }) => {
-                        assert_eq!("payables.asset".to_string(), name, "expected the registered attribute name to be the contract name");
+                        assert_eq!(DEFAULT_CONTRACT_NAME, name.as_str(), "expected the registered attribute name to be the contract name");
                         assert_eq!(
                             DEFAULT_SCOPE_ID.to_string(),
                             from_binary::<String>(&value)
@@ -556,13 +581,13 @@ mod tests {
                 assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
                 let coin = amount.first().unwrap();
                 match to_address.as_str() {
-                    "feebucket" => {
+                    DEFAULT_FEE_COLLECTION_ADDRESS => {
                         assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
-                        assert_eq!("nhash", coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
+                        assert_eq!(DEFAULT_ONBOARDING_DENOM, coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
                     },
-                    "owner_person" => {
+                    DEFAULT_INFO_NAME => {
                         assert_eq!(50, coin.amount.u128(), "expected the overage amount to be refunded to the sender");
-                        assert_eq!("nhash", coin.denom.as_str(), "expected the refund's denomination to equate to the contract's specified denomination");
+                        assert_eq!(DEFAULT_ONBOARDING_DENOM, coin.denom.as_str(), "expected the refund's denomination to equate to the contract's specified denomination");
                     },
                     _ => panic!("unexpected address for bank message send"),
                 }
@@ -578,7 +603,7 @@ mod tests {
         let failure = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("owner-address", &[coin(100, "nothash".to_string())]),
+            mock_info(DEFAULT_INFO_NAME, &[coin(100, "nothash".to_string())]),
             default_register_payable(),
         )
         .unwrap_err();
@@ -588,7 +613,7 @@ mod tests {
                 invalid_denoms,
             } => {
                 assert_eq!(
-                    "nhash", valid_denom,
+                    DEFAULT_ONBOARDING_DENOM, valid_denom,
                     "expected the valid denomination returned to be the default value"
                 );
                 assert_eq!(
@@ -610,14 +635,14 @@ mod tests {
         let failure = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("owner-address", &[]),
+            mock_info(DEFAULT_INFO_NAME, &[]),
             default_register_payable(),
         )
         .unwrap_err();
         match failure {
             ContractError::NoFundsProvided { valid_denom } => {
                 assert_eq!(
-                    "nhash", valid_denom,
+                    DEFAULT_ONBOARDING_DENOM, valid_denom,
                     "the error should reflect the desired fund type"
                 );
             }
@@ -632,7 +657,10 @@ mod tests {
         let failure = execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("owner-address", &[coin(99, "nhash".to_string())]),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(99, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
             default_register_payable(),
         )
         .unwrap_err();
@@ -651,6 +679,56 @@ mod tests {
         };
     }
 
+    #[test]
+    fn test_query_payable_after_register() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        let payable_binary = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::QueryPayable {
+                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+            },
+        )
+        .unwrap();
+        let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
+        assert_eq!(
+            DEFAULT_MARKER_ADDRESS,
+            payable_meta.marker_address.as_str(),
+            "expected the default marker address to be returned"
+        );
+        assert_eq!(
+            DEFAULT_MARKER_DENOM,
+            payable_meta.marker_denom.as_str(),
+            "expected the default marker denom to be returned"
+        );
+        assert_eq!(
+            DEFAULT_SCOPE_ID,
+            payable_meta.scope_id.as_str(),
+            "expected the default scope id to be returned"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_DENOM, payable_meta.payable_denom,
+            "expected the payable to expect payment in the onboarding denom"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL,
+            payable_meta.payable_total_owed.u128(),
+            "expected the payable total owed to reflect the default value"
+        );
+        assert_eq!(DEFAULT_PAYABLE_TOTAL, payable_meta.payable_remaining_owed.u128(), "expected the payable remaining owed to reflect the default value because no payments have been made");
+    }
+
     struct InstArgs {
         env: Env,
         info: MessageInfo,
@@ -666,13 +744,13 @@ mod tests {
         fn default() -> Self {
             InstArgs {
                 env: mock_env(),
-                info: mock_info("admin", &[]),
-                contract_name: "payables.asset".into(),
-                onboarding_cost: "100".into(),
-                onboarding_denom: "nhash".into(),
-                fee_collection_address: "feebucket".into(),
-                fee_percent: Decimal::percent(75),
-                oracle_address: "matt".into(),
+                info: mock_info(DEFAULT_INFO_NAME, &[]),
+                contract_name: DEFAULT_CONTRACT_NAME.into(),
+                onboarding_cost: DEFAULT_ONBOARDING_COST.into(),
+                onboarding_denom: DEFAULT_ONBOARDING_DENOM.into(),
+                fee_collection_address: DEFAULT_FEE_COLLECTION_ADDRESS.into(),
+                fee_percent: Decimal::percent(DEFAULT_FEE_PERCENT),
+                oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
             }
         }
     }
@@ -709,8 +787,8 @@ mod tests {
             marker_address: DEFAULT_MARKER_ADDRESS.into(),
             marker_denom: DEFAULT_MARKER_DENOM.into(),
             scope_id: DEFAULT_SCOPE_ID.into(),
-            payable_denom: "nhash".into(),
-            payable_total: Uint128::new(10000),
+            payable_denom: DEFAULT_PAYABLE_DENOM.into(),
+            payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
         }
     }
 }

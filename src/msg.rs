@@ -38,7 +38,8 @@ pub enum ExecuteMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
-    QueryRequest {},
+    QueryState {},
+    QueryPayable { marker_denom: String },
 }
 
 /// A type alias for contract state.
