@@ -1,17 +1,11 @@
-use cosmwasm_std::{
-    coin, to_binary, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo,
-    Response, StdError, StdResult, Uint128,
-};
-use provwasm_std::{
-    add_attribute, bind_name, AttributeValueType, NameBinding, PartyType, ProvenanceMsg,
-    ProvenanceQuerier,
-};
+use cosmwasm_std::{coin, to_binary, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Addr, Attribute};
+use provwasm_std::{add_attribute, bind_name, AttributeValueType, NameBinding, PartyType, ProvenanceMsg, ProvenanceQuerier, create_marker, MarkerType, grant_marker_access, MarkerAccess, finalize_marker, activate_marker};
 use std::ops::Mul;
 
 use crate::error::ContractError;
 use crate::helper::to_percent;
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
-use crate::state::{config, config_read, State};
+use crate::state::{config, config_read, payable_meta_storage, PayableMeta, State};
 
 /// Initialize the contract
 pub fn instantiate(
@@ -72,60 +66,107 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 /// Handle purchase messages.
 pub fn execute(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     match msg {
-        ExecuteMsg::RegisterScope { scope_id } => register_scope(deps, info, scope_id),
+        ExecuteMsg::RegisterPayableMarker { marker_address, marker_denom, scope_id, payable_denom, payable_total, } => register_payable_marker(deps, env, info, marker_address, marker_denom, scope_id, payable_denom, payable_total),
     }
 }
 
-fn register_scope(
+fn register_payable_marker(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
+    marker_address: String,
+    marker_denom: String,
     scope_id: String,
+    payable_denom: String,
+    payable_total: Uint128,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     let state = config(deps.storage).load()?;
-    let querier = ProvenanceQuerier::new(&deps.querier);
-    let scope = querier.get_scope(scope_id.clone())?;
-    if !scope
-        .owners
-        .into_iter()
-        .any(|owner| owner.role == PartyType::Owner && owner.address == info.sender.as_str())
-    {
-        return Err(ContractError::Unauthorized);
-    }
-    let scope_tag_request = add_attribute(
-        // Tag the scope with the attribute
-        deps.api.addr_validate(&scope_id)?,
-        // Use the contract name as the tag
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec!();
+    let mut attributes: Vec<Attribute> = vec!();
+    // Create a marker that owns the scope
+    let marker_gen_request = create_marker(
+        // Start with only one coin for our new marker type. This can be inflated later
+        1,
+        // Assume the marker denomination is valid
+        marker_denom.clone(),
+        MarkerType::Restricted,
+    )?;
+    messages.push(marker_gen_request);
+    let wallet_marker_grant_request = grant_marker_access(
+        marker_denom.clone(),
+        info.sender.clone(),
+        vec!(
+            MarkerAccess::Burn,
+            MarkerAccess::Deposit,
+            MarkerAccess::Mint,
+            MarkerAccess::Transfer,
+            MarkerAccess::Withdraw,
+        ),
+    )?;
+    messages.push(wallet_marker_grant_request);
+    let contract_marker_grant_request = grant_marker_access(
+        marker_denom.clone(),
+        env.contract.address,
+        vec!(
+            MarkerAccess::Mint,
+            MarkerAccess::Burn,
+            MarkerAccess::Deposit,
+            MarkerAccess::Withdraw,
+            MarkerAccess::Delete,
+            MarkerAccess::Admin,
+            MarkerAccess::Transfer,
+        ),
+    )?;
+    messages.push(contract_marker_grant_request);
+    let marker_validated_addr = deps.api.addr_validate(&marker_address.as_str())?;
+    let marker_tag_request = add_attribute(
+        // Tag the newly-created marker address with an attribute indicating its managed scope
+        marker_validated_addr.clone(),
+        //
         state.contract_name.clone(),
-        // TODO: Maybe don't use the scope id as the value of the attribute. Something more useful will likely present its as development continues
-        to_binary(&scope_id)?,
+        to_binary(&scope_id.clone())?,
         AttributeValueType::String,
     )?;
+    messages.push(marker_tag_request);
+    let marker_finalize_request = finalize_marker(marker_denom.clone())?;
+    messages.push(marker_finalize_request);
+    let marker_activate_request = activate_marker(marker_denom.clone())?;
+    messages.push(marker_activate_request);
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
-    let mut response = Response::new().add_message(scope_tag_request);
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
-        response = response.add_message(fee_message).add_attribute(
-            "oracle_funds_kept",
-            format!(
-                "{}{}",
-                fee_charge_response.oracle_fee_amount_kept, state.onboarding_denom
-            ),
-        )
+        messages.push(fee_message);
+        attributes.push(Attribute::new("oracle_funds_kept",
+                                       format!(
+                                           "{}{}",
+                                           fee_charge_response.oracle_fee_amount_kept, state.onboarding_denom
+                                       )));
     }
     if let Some(refund_message) = fee_charge_response.fee_refund_message {
-        response = response.add_message(refund_message).add_attribute(
+        messages.push(refund_message);
+        attributes.push(Attribute::new(
             "refund_amount",
             format!(
                 "{}{}",
                 fee_charge_response.refund_amount, state.onboarding_denom
-            ),
-        )
+            )
+        ));
     }
-    Ok(response)
+    let payable_meta = PayableMeta {
+        marker_address: marker_validated_addr,
+        marker_denom: marker_denom.clone(),
+        scope_id,
+        payable_denom,
+        payable_total_owed: payable_total.clone(),
+        payable_remaining_owed: payable_total,
+    };
+    let mut meta_storage = payable_meta_storage(deps.storage);
+    meta_storage.save(marker_denom.as_bytes(), &payable_meta);
+    Ok(Response::new().add_messages(messages).add_attributes(attributes))
 }
 
 struct FeeChargeResponse {
@@ -225,6 +266,10 @@ mod tests {
     use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{AttributeMsgParams, NameMsgParams, Party, ProvenanceMsgParams, Scope};
+
+    const DEFAULT_MARKER_ADDRESS: &str = "";
+    const DEFAULT_MARKER_DENOM: &str = "";
+    const DEFAULT_SCOPE_ID: &str = "scope-id";
 
     #[test]
     fn test_valid_init() {
@@ -372,9 +417,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(owner_address.as_str(), &[coin(100, "nhash".to_string())]),
-            ExecuteMsg::RegisterScope {
-                scope_id: scope_id.clone(),
-            },
+            default_register_payable(),
         )
         .unwrap();
         assert_eq!(
@@ -430,9 +473,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(owner_address.as_str(), &[coin(150, "nhash".to_string())]),
-            ExecuteMsg::RegisterScope {
-                scope_id: scope_id.clone(),
-            },
+            default_register_payable(),
         )
         .unwrap();
         assert_eq!(
@@ -495,9 +536,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info(owner_address.as_str(), &[coin(100, "nhash".to_string())]),
-            ExecuteMsg::RegisterScope {
-                scope_id: scope_id.clone(),
-            },
+            default_register_payable(),
         )
         .unwrap_err();
         assert!(
@@ -519,9 +558,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info("owner-address", &[coin(100, "nothash".to_string())]),
-            ExecuteMsg::RegisterScope {
-                scope_id: "scope-id".into(),
-            },
+            default_register_payable(),
         )
         .unwrap_err();
         match failure {
@@ -558,9 +595,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info("owner-address", &[]),
-            ExecuteMsg::RegisterScope {
-                scope_id: "scope-id".into(),
-            },
+            default_register_payable(),
         )
         .unwrap_err();
         match failure {
@@ -587,9 +622,7 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             mock_info("owner-address", &[coin(99, "nhash".to_string())]),
-            ExecuteMsg::RegisterScope {
-                scope_id: "scope-id".into(),
-            },
+            default_register_payable(),
         )
         .unwrap_err();
         match failure {
@@ -671,6 +704,16 @@ mod tests {
             }],
             data_access: vec![],
             value_owner_address: owner_address.clone(),
+        }
+    }
+
+    fn default_register_payable() -> ExecuteMsg {
+        ExecuteMsg::RegisterPayableMarker {
+            marker_address: DEFAULT_MARKER_ADDRESS.into(),
+            marker_denom: DEFAULT_MARKER_DENOM.into(),
+            scope_id: DEFAULT_SCOPE_ID.into(),
+            payable_denom: "nhash".into(),
+            payable_total: Uint128::new(10000),
         }
     }
 }
