@@ -38,6 +38,26 @@
         }
       },
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "oracle_approval"
+      ],
+      "properties": {
+        "oracle_approval": {
+          "type": "object",
+          "required": [
+            "marker_denom"
+          ],
+          "properties": {
+            "marker_denom": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
     }
   ],
   "definitions": {

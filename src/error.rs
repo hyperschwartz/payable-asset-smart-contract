@@ -9,6 +9,12 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized,
 
+    #[error("Payable with denom {payable_denom} has already been approved")]
+    DuplicateApproval { payable_denom: String },
+
+    #[error("Funds were provided for an operation that does not require them")]
+    FundsPresent,
+
     #[error("Insufficient funds provided. Required {amount_needed} but got {amount_provided}")]
     InsufficientFundsProvided {
         amount_needed: u128,
@@ -28,4 +34,7 @@ pub enum ContractError {
 
     #[error("No funds of type {valid_denom} were provided")]
     NoFundsProvided { valid_denom: String },
+
+    #[error("Unable to locate target payable {target_denom}")]
+    PayableNotFound { target_denom: String },
 }

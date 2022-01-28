@@ -3,6 +3,7 @@ pub mod contract;
 pub mod error;
 pub mod helper;
 pub mod msg;
+pub mod oracle_approval;
 pub mod register_payable;
 pub mod state;
 

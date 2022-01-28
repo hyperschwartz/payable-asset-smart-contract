@@ -43,6 +43,7 @@ pub struct PayableMeta {
     pub payable_denom: String,
     pub payable_total_owed: Uint128,
     pub payable_remaining_owed: Uint128,
+    pub oracle_approved: bool,
 }
 
 pub fn payable_meta_storage(storage: &mut dyn Storage) -> Bucket<PayableMeta> {

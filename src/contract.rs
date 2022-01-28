@@ -11,6 +11,7 @@ use std::ops::Mul;
 use crate::error::ContractError;
 use crate::helper::{to_percent, CONTRACT_MARKER_PERMISSIONS, SENDER_MARKER_PERMISSIONS};
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
+use crate::oracle_approval::OracleApprovalV1;
 use crate::register_payable::RegisterPayableMarkerV1;
 use crate::state::{
     config, config_read, payable_meta_storage, payable_meta_storage_read, PayableMeta, State,
@@ -107,6 +108,9 @@ pub fn execute(
                 },
             )
         }
+        ExecuteMsg::OracleApproval { marker_denom } => {
+            oracle_approval(deps, info, OracleApprovalV1 { marker_denom })
+        }
     }
 }
 
@@ -147,8 +151,9 @@ fn register_payable_marker(
     let marker_tag_request = add_attribute(
         // Tag the newly-created marker address with an attribute indicating its managed scope
         register.marker_address.clone(),
-        //
+        // The contract's name should be stamped on the attribute, verifying its source
         state.contract_name.clone(),
+        // Serialize the scope id as the value within the attribute - showing that this marker owns the scope
         to_binary(&register.scope_id)?,
         AttributeValueType::String,
     )?;
@@ -181,6 +186,7 @@ fn register_payable_marker(
         payable_denom: register.payable_denom,
         payable_total_owed: register.payable_total,
         payable_remaining_owed: register.payable_total,
+        oracle_approved: false,
     };
     let mut meta_storage = payable_meta_storage(deps.storage);
     meta_storage.save(register.marker_denom.as_bytes(), &payable_meta)?;
@@ -270,6 +276,62 @@ fn validate_fee_params_get_messages(
         refund_amount: refund_amount.u128(),
         oracle_fee_amount_kept: (funds_sent - onboarding_cost).u128(),
     })
+}
+
+fn oracle_approval(
+    deps: DepsMut,
+    info: MessageInfo,
+    oracle_approval: OracleApprovalV1,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
+    // Oracle approval should not require any funds
+    if !info.funds.is_empty() {
+        return Err(ContractError::FundsPresent);
+    }
+    let state = config(deps.storage).load()?;
+    // Only the designated oracle can mark an approval on a denomination
+    if info.sender != state.oracle_address {
+        return Err(ContractError::Unauthorized);
+    }
+    let mut payables_bucket = payable_meta_storage(deps.storage);
+    // Ensure the target payable definition actually exists
+    let mut target_payable =
+        match payables_bucket.load(oracle_approval.marker_denom.clone().as_bytes()) {
+            Ok(meta) => {
+                if meta.oracle_approved {
+                    return Err(ContractError::DuplicateApproval {
+                        payable_denom: oracle_approval.marker_denom,
+                    });
+                }
+                meta
+            }
+            Err(_) => {
+                return Err(ContractError::PayableNotFound {
+                    target_denom: oracle_approval.marker_denom,
+                });
+            }
+        };
+    let oracle_approval_message = add_attribute(
+        target_payable.marker_address.clone(),
+        state.contract_name,
+        to_binary(&state.oracle_address.as_str())?,
+        AttributeValueType::String,
+    )?;
+    messages.push(oracle_approval_message);
+    // The oracle is paid X on each approval, where X is the remaining amount after the fee is taken
+    // from the onboarding funds.
+    let oracle_withdraw_amount =
+        state.onboarding_cost - state.onboarding_cost.mul(state.fee_percent);
+    // Only create a payment to the oracle if there were funds stored in the first place
+    if oracle_withdraw_amount.u128() > 0 {
+        messages.push(CosmosMsg::Bank(BankMsg::Send {
+            to_address: state.oracle_address.into(),
+            amount: vec![coin(oracle_withdraw_amount.u128(), state.onboarding_denom)],
+        }));
+    }
+    target_payable.oracle_approved = true;
+    payables_bucket.save(oracle_approval.marker_denom.as_bytes(), &target_payable)?;
+    Ok(Response::new().add_messages(messages))
 }
 
 /// Called when migrating a contract instance to a new code ID.
@@ -727,6 +789,329 @@ mod tests {
             "expected the payable total owed to reflect the default value"
         );
         assert_eq!(DEFAULT_PAYABLE_TOTAL, payable_meta.payable_remaining_owed.u128(), "expected the payable remaining owed to reflect the default value because no payments have been made");
+        assert_eq!(false, payable_meta.oracle_approved, "when initially created, the meta should show that the oracle has not yet approved the payable");
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_success() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        let approval_response = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
+            ExecuteMsg::OracleApproval {
+                marker_denom: DEFAULT_MARKER_DENOM.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(2, approval_response.messages.len(), "expected a message for the oracle attribute stamp a message for the oracle fee withdrawal");
+        approval_response.messages.into_iter().for_each(|msg| match msg.msg {
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute { address, name, value, value_type, }) => {
+                        assert_eq!(DEFAULT_MARKER_ADDRESS, address.as_str(), "expected the attribute to be added to the marker");
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name.as_str(),
+                            "the attribute name bound should be the contract name",
+                        );
+                        assert_eq!(
+                            DEFAULT_ORACLE_ADDRESS,
+                            from_binary::<String>(&value).unwrap().as_str(),
+                            "the attribute value should equate to the oracle's address",
+                        );
+                        assert_eq!(
+                            AttributeValueType::String,
+                            value_type,
+                            "the value type should be a string"
+                        );
+                    },
+                    _ => panic!("unexpected provenance message occurred during oracle approval"),
+                }
+            },
+            CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+                assert_eq!(
+                    DEFAULT_ORACLE_ADDRESS,
+                    to_address.as_str(),
+                    "the bank transfer should be to the oracle",
+                );
+                assert_eq!(1, amount.len(), "only one coin should be included in the transfer");
+                let coin = amount.first().unwrap();
+                assert_eq!(
+                    DEFAULT_ONBOARDING_DENOM,
+                    coin.denom,
+                    "the denomination for the oracle withdrawal should be the onboarding denom",
+                );
+                assert_eq!(
+                    25,
+                    coin.amount.u128(),
+                    "the oracle withdrawal amount should be 25, because the onboarding cost is 100 and the fee is 75%, leaving the remaining 25% for the oracle",
+                );
+            },
+            _ => panic!("unexpected message occurred during oracle approval"),
+        });
+        let payable_binary = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::QueryPayable {
+                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+            },
+        )
+        .unwrap();
+        let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
+        assert_eq!(
+            true, payable_meta.oracle_approved,
+            "the payable should be marked as oracle approved after the function executes"
+        );
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_success_with_no_oracle_fee() {
+        let mut deps = mock_dependencies(&[]);
+        // Set the fee percent to 100%, ensuring that all funds are taken as a fee to the fee
+        // collector, with none remaining for the oracle to withdraw
+        test_instantiate(
+            deps.as_mut(),
+            InstArgs {
+                fee_percent: Decimal::percent(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        let approval_response = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
+            ExecuteMsg::OracleApproval {
+                marker_denom: DEFAULT_MARKER_DENOM.into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            1,
+            approval_response.messages.len(),
+            "expected only a single message to be sent for the oracle attribute registration"
+        );
+        approval_response
+            .messages
+            .into_iter()
+            .for_each(|msg| match msg.msg {
+                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        address,
+                        name,
+                        value,
+                        value_type,
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_MARKER_ADDRESS,
+                            address.as_str(),
+                            "expected the attribute to be added to the marker"
+                        );
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name.as_str(),
+                            "the attribute name bound should be the contract name",
+                        );
+                        assert_eq!(
+                            DEFAULT_ORACLE_ADDRESS,
+                            from_binary::<String>(&value).unwrap().as_str(),
+                            "the attribute value should equate to the oracle's address",
+                        );
+                        assert_eq!(
+                            AttributeValueType::String,
+                            value_type,
+                            "the value type should be a string"
+                        );
+                    }
+                    _ => panic!("unexpected provenance message occurred during oracle approval"),
+                },
+                _ => panic!("unexpected message occurred during oracle approval"),
+            });
+        let payable_binary = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::QueryPayable {
+                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+            },
+        )
+        .unwrap();
+        let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
+        assert_eq!(
+            true, payable_meta.oracle_approved,
+            "the payable should be marked as oracle approved after the function executes"
+        );
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_fails_for_included_funds() {
+        let mut deps = mock_dependencies(&[]);
+        // Set the fee percent to 100%, ensuring that all funds are taken as a fee to the fee
+        // collector, with none remaining for the oracle to withdraw
+        test_instantiate(
+            deps.as_mut(),
+            InstArgs {
+                fee_percent: Decimal::percent(100),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        let error = execute(
+            deps.as_mut(),
+            mock_env(),
+            // Include some hash in the request, which should cause a rejection
+            mock_info(
+                DEFAULT_ORACLE_ADDRESS,
+                &[coin(400, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            ExecuteMsg::OracleApproval {
+                marker_denom: DEFAULT_MARKER_DENOM.into(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ContractError::FundsPresent),
+            "The execution should be rejected because the oracle sent funds",
+        );
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_fails_for_invalid_sender_address() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        let error = execute(
+            deps.as_mut(),
+            mock_env(),
+            // Try to call into the oracle approval as the fee collector.  Only the oracle is
+            // allowed to make this call, so the execution should fail.
+            mock_info(DEFAULT_FEE_COLLECTION_ADDRESS, &[]),
+            ExecuteMsg::OracleApproval {
+                marker_denom: DEFAULT_MARKER_DENOM.into(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ContractError::Unauthorized),
+            "The execution should be rejected because the sender was not the oracle",
+        );
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_fails_for_duplicate_execution() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        // Closure to keep code more concise than some of these other tests I wrote...
+        let mut execute_as_oracle = || {
+            execute(
+                deps.as_mut(),
+                mock_env(),
+                mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
+                ExecuteMsg::OracleApproval {
+                    marker_denom: DEFAULT_MARKER_DENOM.into(),
+                },
+            )
+        };
+        // Execute once with good args, should be a success
+        execute_as_oracle().unwrap();
+        // Execute a second time, should be rejected because the oracle stamp has already been added
+        let error = execute_as_oracle().unwrap_err();
+        match error {
+            ContractError::DuplicateApproval { payable_denom } => {
+                assert_eq!(
+                    DEFAULT_MARKER_DENOM,
+                    payable_denom.as_str(),
+                    "the error message should include the marker denomination target"
+                );
+            }
+            _ => panic!("unexpected error occurred during execution"),
+        };
+    }
+
+    #[test]
+    fn test_execute_oracle_approval_fails_for_wrong_target_payable() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap();
+        // Closure to keep code more concise than some of these other tests I wrote...
+        let error = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
+            ExecuteMsg::OracleApproval {
+                marker_denom: "some-other-denom".into(),
+            },
+        )
+        .unwrap_err();
+        match error {
+            ContractError::PayableNotFound { target_denom } => {
+                assert_eq!(
+                    "some-other-denom",
+                    target_denom.as_str(),
+                    "the incorrect denomination should be included in the error message"
+                );
+            }
+            _ => panic!("unexpected error occurred during execution"),
+        }
     }
 
     struct InstArgs {

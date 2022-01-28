@@ -32,6 +32,9 @@ pub enum ExecuteMsg {
         payable_denom: String,
         payable_total: Uint128,
     },
+    OracleApproval {
+        marker_denom: String,
+    },
 }
 
 /// A message sent to query contract config state.
