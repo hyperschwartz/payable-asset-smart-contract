@@ -1,7 +1,4 @@
-use cosmwasm_std::{
-    coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
-    MessageInfo, Response, StdError, StdResult, Uint128,
-};
+use cosmwasm_std::{coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Addr};
 use provwasm_std::{
     activate_marker, add_attribute, bind_name, create_marker, finalize_marker, grant_marker_access,
     AttributeValueType, MarkerType, NameBinding, ProvenanceMsg,
@@ -9,7 +6,7 @@ use provwasm_std::{
 use std::ops::Mul;
 
 use crate::error::ContractError;
-use crate::helper::{to_percent, CONTRACT_MARKER_PERMISSIONS, SENDER_MARKER_PERMISSIONS};
+use crate::helper::{to_percent, CONTRACT_MARKER_PERMISSIONS, DEFAULT_MARKER_COIN_AMOUNT};
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::oracle_approval::OracleApprovalV1;
 use crate::register_payable::RegisterPayableMarkerV1;
@@ -123,41 +120,15 @@ fn register_payable_marker(
     let state = config(deps.storage).load()?;
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
-    // Create a marker that owns the scope
-    let marker_gen_request = create_marker(
-        // Start with only one coin for our new marker type. This can be inflated later
-        1,
-        // Assume the marker denomination is valid
-        register.marker_denom.clone(),
-        MarkerType::Restricted,
-    )?;
-    messages.push(marker_gen_request);
-    let wallet_marker_grant_request = grant_marker_access(
-        register.marker_denom.clone(),
-        info.sender.clone(),
-        SENDER_MARKER_PERMISSIONS.to_vec(),
-    )?;
-    messages.push(wallet_marker_grant_request);
-    let contract_marker_grant_request = grant_marker_access(
-        register.marker_denom.clone(),
-        env.contract.address,
-        CONTRACT_MARKER_PERMISSIONS.to_vec(),
-    )?;
-    messages.push(contract_marker_grant_request);
-    let marker_finalize_request = finalize_marker(register.marker_denom.clone())?;
-    messages.push(marker_finalize_request);
-    let marker_activate_request = activate_marker(register.marker_denom.clone())?;
-    messages.push(marker_activate_request);
-    let marker_tag_request = add_attribute(
-        // Tag the newly-created marker address with an attribute indicating its managed scope
-        register.marker_address.clone(),
-        // The contract's name should be stamped on the attribute, verifying its source
-        state.contract_name.clone(),
-        // Serialize the scope id as the value within the attribute - showing that this marker owns the scope
-        to_binary(&register.scope_id)?,
-        AttributeValueType::String,
-    )?;
-    messages.push(marker_tag_request);
+    messages.append(
+        &mut generate_registration_marker_messages(
+            register.marker_denom.clone(),
+            env.contract.address,
+            register.marker_address.clone(),
+            state.contract_name.clone(),
+            register.scope_id.clone(),
+        )?
+    );
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
         messages.push(fee_message);
@@ -193,6 +164,49 @@ fn register_payable_marker(
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))
+}
+
+fn generate_registration_marker_messages(
+    marker_denom: String,
+    contract_address: Addr,
+    marker_address: Addr,
+    contract_name: String,
+    scope_id: String,
+) -> Result<Vec<CosmosMsg<ProvenanceMsg>>, ContractError> {
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec!();
+    // Create a marker that owns the scope
+    let marker_gen_request = create_marker(
+        // amount: The amount of coin that starts in the marker
+        DEFAULT_MARKER_COIN_AMOUNT,
+        // denom: The denomination on the new coin. Should be "payable-type-<payable-uuid>"
+        marker_denom.clone(),
+        // Restrict the marker - only the contract should be able to make changes to it
+        MarkerType::Restricted,
+    )?;
+    messages.push(marker_gen_request);
+    // Grant the contract permission to manipulate the marker in any way it sees fit in order to
+    // facilitate trade functionality
+    let contract_marker_grant_request = grant_marker_access(
+        marker_denom.clone(),
+        contract_address,
+        CONTRACT_MARKER_PERMISSIONS.to_vec(),
+    )?;
+    messages.push(contract_marker_grant_request);
+    let marker_finalize_request = finalize_marker(marker_denom.clone())?;
+    messages.push(marker_finalize_request);
+    let marker_activate_request = activate_marker(marker_denom)?;
+    messages.push(marker_activate_request);
+    let marker_tag_request = add_attribute(
+        // Tag the newly-created marker address with an attribute indicating its managed scope
+        marker_address,
+        // The contract's name should be stamped on the attribute, verifying its source
+        contract_name,
+        // Serialize the scope id as the value within the attribute - showing that this marker owns the scope
+        to_binary(&scope_id)?,
+        AttributeValueType::String,
+    )?;
+    messages.push(marker_tag_request);
+    Ok(messages)
 }
 
 struct FeeChargeResponse {
@@ -361,6 +375,7 @@ mod tests {
     const DEFAULT_SCOPE_ID: &str = "scope1qpyq6g6j0tuprmyglw0hn2czfzsq6fcyl8";
     const DEFAULT_PAYABLE_DENOM: &str = "nhash";
     const DEFAULT_PAYABLE_TOTAL: u128 = 10000;
+    // mock_env() creates this as the default contract address
     const MOCK_COSMOS_CONTRACT_ADDRESS: &str = "cosmos2contract";
 
     #[test]
@@ -511,9 +526,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            7,
+            6,
             response.messages.len(),
-            "seven messages expected: create marker, two grant marker, one finalize marker, one activate marker, one add attribute, and one fee exchange",
+            "six messages expected: create marker, one grant marker, one finalize marker, one activate marker, one add attribute, and one fee exchange",
         );
         response.messages.into_iter().for_each(|msg| match msg.msg {
             CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
@@ -521,22 +536,13 @@ mod tests {
                     // Handled in order in which they appear in the contract's execution
                     ProvenanceMsgParams::Marker(MarkerMsgParams::CreateMarker { coin, marker_type }) => {
                         assert_eq!(DEFAULT_MARKER_DENOM, coin.denom.as_str());
-                        assert_eq!(1, coin.amount.u128());
+                        assert_eq!(DEFAULT_MARKER_COIN_AMOUNT, coin.amount.u128());
                         assert_eq!(MarkerType::Restricted, marker_type);
                     },
                     ProvenanceMsgParams::Marker(MarkerMsgParams::GrantMarkerAccess { denom, address, permissions }) => {
                         assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                        match address.as_str() {
-                            // Declared at the beginning for the contract address
-                            DEFAULT_INFO_NAME => {
-                                assert_eq!(SENDER_MARKER_PERMISSIONS.to_vec(), permissions);
-                            },
-                            // mock_env() creates this as the default contract address
-                            MOCK_COSMOS_CONTRACT_ADDRESS => {
-                                assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
-                            },
-                            _ => panic!("unexpected address encountered"),
-                        }
+                        assert_eq!(MOCK_COSMOS_CONTRACT_ADDRESS, address.as_str());
+                        assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
                     },
                     ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
                         name,
@@ -588,9 +594,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            8,
+            7,
             response.messages.len(),
-            "seven messages expected: create marker, two grant marker, one finalize marker, one activate marker, one add attribute, one fee exchange, and one fee refund",
+            "seven messages expected: create marker, one grant marker, one finalize marker, one activate marker, one add attribute, one fee exchange, and one fee refund",
         );
         response.messages.into_iter().for_each(|msg| match msg.msg {
             CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
@@ -598,22 +604,13 @@ mod tests {
                     // Handled in order in which they appear in the contract's execution
                     ProvenanceMsgParams::Marker(MarkerMsgParams::CreateMarker { coin, marker_type }) => {
                         assert_eq!(DEFAULT_MARKER_DENOM, coin.denom.as_str());
-                        assert_eq!(1, coin.amount.u128());
+                        assert_eq!(DEFAULT_MARKER_COIN_AMOUNT, coin.amount.u128());
                         assert_eq!(MarkerType::Restricted, marker_type);
                     },
                     ProvenanceMsgParams::Marker(MarkerMsgParams::GrantMarkerAccess { denom, address, permissions }) => {
                         assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                        match address.as_str() {
-                            // Declared at the beginning for the contract address
-                            DEFAULT_INFO_NAME => {
-                                assert_eq!(SENDER_MARKER_PERMISSIONS.to_vec(), permissions);
-                            },
-                            // mock_env() creates this as the default contract address
-                            MOCK_COSMOS_CONTRACT_ADDRESS => {
-                                assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
-                            },
-                            _ => panic!("unexpected address encountered"),
-                        }
+                        assert_eq!(MOCK_COSMOS_CONTRACT_ADDRESS, address.as_str());
+                        assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
                     },
                     ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
                                                        name,
