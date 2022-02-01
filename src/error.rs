@@ -9,8 +9,8 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized,
 
-    #[error("Payable with denom {payable_denom} has already been approved")]
-    DuplicateApproval { payable_denom: String },
+    #[error("Payable with uuid {payable_uuid} has already been approved")]
+    DuplicateApproval { payable_uuid: String },
 
     #[error("Funds were provided for an operation that does not require them")]
     FundsPresent,
@@ -35,6 +35,18 @@ pub enum ContractError {
     #[error("No funds of type {valid_denom} were provided")]
     NoFundsProvided { valid_denom: String },
 
-    #[error("Unable to locate target payable {target_denom}")]
-    PayableNotFound { target_denom: String },
+    #[error("Target payable with uuid [{payable_uuid}] is not ready for payment due to: {not_ready_reason}")]
+    NotReadyForPayment {
+        payable_uuid: String,
+        not_ready_reason: String,
+    },
+
+    #[error("Unable to locate target payable {payable_uuid}")]
+    PayableNotFound { payable_uuid: String },
+
+    #[error("Payment too large. Total owed [{total_owed}], amount provided [{amount_provided}]")]
+    PaymentTooLarge {
+        total_owed: u128,
+        amount_provided: u128,
+    },
 }

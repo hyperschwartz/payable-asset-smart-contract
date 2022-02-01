@@ -1,12 +1,13 @@
-use cosmwasm_std::{coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult, Uint128, Addr};
-use provwasm_std::{
-    activate_marker, add_attribute, bind_name, create_marker, finalize_marker, grant_marker_access,
-    AttributeValueType, MarkerType, NameBinding, ProvenanceMsg,
+use cosmwasm_std::{
+    coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
+    MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
 };
+use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuerier, Scope};
 use std::ops::Mul;
 
 use crate::error::ContractError;
-use crate::helper::{to_percent, CONTRACT_MARKER_PERMISSIONS, DEFAULT_MARKER_COIN_AMOUNT};
+use crate::helper::{to_percent, PAYABLE_REGISTERED_KEY};
+use crate::make_payment::MakePaymentV1;
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::oracle_approval::OracleApprovalV1;
 use crate::register_payable::RegisterPayableMarkerV1;
@@ -67,9 +68,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             let json = to_binary(&state)?;
             Ok(json)
         }
-        QueryMsg::QueryPayable { marker_denom } => {
+        QueryMsg::QueryPayable { payable_uuid } => {
             let meta_storage = payable_meta_storage_read(deps.storage);
-            let payable_meta = meta_storage.load(marker_denom.as_bytes())?;
+            let payable_meta = meta_storage.load(payable_uuid.as_bytes())?;
             let json = to_binary(&payable_meta)?;
             Ok(json)
         }
@@ -79,57 +80,45 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 /// Handle purchase messages.
 pub fn execute(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     match msg {
-        ExecuteMsg::RegisterPayableMarker {
-            marker_address,
-            marker_denom,
+        ExecuteMsg::RegisterPayable {
+            payable_uuid,
             scope_id,
             payable_denom,
             payable_total,
-        } => {
-            let marker_address = deps.api.addr_validate(marker_address.as_str())?;
-            register_payable_marker(
-                deps,
-                env,
-                info,
-                RegisterPayableMarkerV1 {
-                    marker_address,
-                    marker_denom,
-                    scope_id,
-                    payable_denom,
-                    payable_total,
-                },
-            )
+        } => register_payable(
+            deps,
+            info,
+            RegisterPayableMarkerV1 {
+                payable_uuid,
+                scope_id,
+                payable_denom,
+                payable_total,
+            },
+        ),
+        ExecuteMsg::OracleApproval { payable_uuid } => {
+            oracle_approval(deps, info, OracleApprovalV1 { payable_uuid })
         }
-        ExecuteMsg::OracleApproval { marker_denom } => {
-            oracle_approval(deps, info, OracleApprovalV1 { marker_denom })
+        ExecuteMsg::MakePayment { payable_uuid } => {
+            make_payment(deps, info, MakePaymentV1 { payable_uuid })
         }
     }
 }
 
-fn register_payable_marker(
+fn register_payable(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     register: RegisterPayableMarkerV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     let state = config(deps.storage).load()?;
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
-    messages.append(
-        &mut generate_registration_marker_messages(
-            register.marker_denom.clone(),
-            env.contract.address,
-            register.marker_address.clone(),
-            state.contract_name.clone(),
-            register.scope_id.clone(),
-        )?
-    );
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
+    // TODO: Tag the payable uuid on the scope as an attribute
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
         messages.push(fee_message);
         attributes.push(Attribute::new(
@@ -150,9 +139,24 @@ fn register_payable_marker(
             ),
         ));
     }
+    // If the sender's address is not listed as an owner address on the target scope for the payable,
+    // then they are not authorized to register this payable
+    if get_scope_by_id(&deps.querier, &register.scope_id)?
+        .owners
+        .into_iter()
+        .filter(|owner| owner.address == info.sender)
+        .count()
+        == 0
+    {
+        return Err(ContractError::Unauthorized);
+    }
+    // Ensure that this payable registration can be picked up by event key
+    attributes.push(Attribute::new(
+        PAYABLE_REGISTERED_KEY.to_string(),
+        &register.payable_uuid,
+    ));
     let payable_meta = PayableMeta {
-        marker_address: register.marker_address,
-        marker_denom: register.marker_denom.clone(),
+        payable_uuid: register.payable_uuid,
         scope_id: register.scope_id,
         payable_denom: register.payable_denom,
         payable_total_owed: register.payable_total,
@@ -160,53 +164,14 @@ fn register_payable_marker(
         oracle_approved: false,
     };
     let mut meta_storage = payable_meta_storage(deps.storage);
-    meta_storage.save(register.marker_denom.as_bytes(), &payable_meta)?;
+    meta_storage.save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))
 }
 
-fn generate_registration_marker_messages(
-    marker_denom: String,
-    contract_address: Addr,
-    marker_address: Addr,
-    contract_name: String,
-    scope_id: String,
-) -> Result<Vec<CosmosMsg<ProvenanceMsg>>, ContractError> {
-    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec!();
-    // Create a marker that owns the scope
-    let marker_gen_request = create_marker(
-        // amount: The amount of coin that starts in the marker
-        DEFAULT_MARKER_COIN_AMOUNT,
-        // denom: The denomination on the new coin. Should be "payable-type-<payable-uuid>"
-        marker_denom.clone(),
-        // Restrict the marker - only the contract should be able to make changes to it
-        MarkerType::Restricted,
-    )?;
-    messages.push(marker_gen_request);
-    // Grant the contract permission to manipulate the marker in any way it sees fit in order to
-    // facilitate trade functionality
-    let contract_marker_grant_request = grant_marker_access(
-        marker_denom.clone(),
-        contract_address,
-        CONTRACT_MARKER_PERMISSIONS.to_vec(),
-    )?;
-    messages.push(contract_marker_grant_request);
-    let marker_finalize_request = finalize_marker(marker_denom.clone())?;
-    messages.push(marker_finalize_request);
-    let marker_activate_request = activate_marker(marker_denom)?;
-    messages.push(marker_activate_request);
-    let marker_tag_request = add_attribute(
-        // Tag the newly-created marker address with an attribute indicating its managed scope
-        marker_address,
-        // The contract's name should be stamped on the attribute, verifying its source
-        contract_name,
-        // Serialize the scope id as the value within the attribute - showing that this marker owns the scope
-        to_binary(&scope_id)?,
-        AttributeValueType::String,
-    )?;
-    messages.push(marker_tag_request);
-    Ok(messages)
+fn get_scope_by_id(querier: &QuerierWrapper, scope_id: &str) -> StdResult<Scope> {
+    ProvenanceQuerier::new(querier).get_scope(scope_id)
 }
 
 struct FeeChargeResponse {
@@ -309,29 +274,22 @@ fn oracle_approval(
     }
     let mut payables_bucket = payable_meta_storage(deps.storage);
     // Ensure the target payable definition actually exists
-    let mut target_payable =
-        match payables_bucket.load(oracle_approval.marker_denom.clone().as_bytes()) {
-            Ok(meta) => {
-                if meta.oracle_approved {
-                    return Err(ContractError::DuplicateApproval {
-                        payable_denom: oracle_approval.marker_denom,
-                    });
-                }
-                meta
-            }
-            Err(_) => {
-                return Err(ContractError::PayableNotFound {
-                    target_denom: oracle_approval.marker_denom,
+    let mut target_payable = match payables_bucket.load(oracle_approval.payable_uuid.as_bytes()) {
+        Ok(meta) => {
+            if meta.oracle_approved {
+                return Err(ContractError::DuplicateApproval {
+                    payable_uuid: oracle_approval.payable_uuid,
                 });
             }
-        };
-    let oracle_approval_message = add_attribute(
-        target_payable.marker_address.clone(),
-        state.contract_name,
-        to_binary(&state.oracle_address.as_str())?,
-        AttributeValueType::String,
-    )?;
-    messages.push(oracle_approval_message);
+            meta
+        }
+        Err(_) => {
+            return Err(ContractError::PayableNotFound {
+                payable_uuid: oracle_approval.payable_uuid,
+            });
+        }
+    };
+    // TODO: Tag an attribute on the scope once functionality is available
     // The oracle is paid X on each approval, where X is the remaining amount after the fee is taken
     // from the onboarding funds.
     let oracle_withdraw_amount =
@@ -344,8 +302,56 @@ fn oracle_approval(
         }));
     }
     target_payable.oracle_approved = true;
-    payables_bucket.save(oracle_approval.marker_denom.as_bytes(), &target_payable)?;
+    payables_bucket.save(oracle_approval.payable_uuid.as_bytes(), &target_payable)?;
     Ok(Response::new().add_messages(messages))
+}
+
+// TODO: Anyone can currently pay an invoice. Need to add payer as a register payable arg
+fn make_payment(
+    _deps: DepsMut,
+    _info: MessageInfo,
+    _make_payment: MakePaymentV1,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    // let payables_bucket = payable_meta_storage(deps.storage);
+    // let target_payable =
+    // match payables_bucket.load(make_payment.payable_uuid.as_bytes()) {
+    //     Ok(meta) => {
+    //         if !meta.oracle_approved {
+    //             return Err(ContractError::NotReadyForPayment {
+    //                 payable_uuid: meta.payable_uuid,
+    //                 not_ready_reason: "Payable missing oracle approval".into(),
+    //             });
+    //         }
+    //         meta
+    //     },
+    //     Err(_) => {
+    //         return Err(ContractError::PayableNotFound { payable_uuid: make_payment.payable_uuid });
+    //     }
+    // };
+    // let invalid_funds = info.funds.iter().filter_map(|coin| {
+    //     if coin.denom != target_payable.payable_denom {
+    //         Some(coin.denom.clone())
+    //     } else {
+    //         None
+    //     }
+    // }).collect::<Vec<String>>();
+    // if !invalid_funds.is_empty() {
+    //     return Err(ContractError::InvalidFundsProvided { valid_denom: target_payable.payable_denom, invalid_denoms: invalid_funds })
+    // }
+    // // Now that all funds are verified equivalent to our payment denomination, sum all amounts to
+    // // derive the total provided
+    // let payment_amount = info.funds.into_iter().fold(0u128, |acc, coin| acc + coin.amount.u128());
+    // if payment_amount <= 0 {
+    //     return Err(ContractError::NoFundsProvided { valid_denom: target_payable.payable_denom });
+    // }
+    // if payment_amount > target_payable.payable_remaining_owed.u128() {
+    //     return Err(ContractError::PaymentTooLarge { total_owed: target_payable.payable_remaining_owed.u128(), amount_provided: payment_amount });
+    // }
+    // TODO: Lookup the owner of the scope to target them for payment
+    Ok(Response::new().add_attribute(
+        "in-development",
+        "this route does not yet work. RIP in gas fees",
+    ))
 }
 
 /// Called when migrating a contract instance to a new code ID.
@@ -358,10 +364,12 @@ mod tests {
     use crate::msg::QueryResponse;
 
     use super::*;
+    use crate::error::ContractError::Std;
     use cosmwasm_std::testing::{mock_env, mock_info};
+    use cosmwasm_std::StdError::GenericErr;
     use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
-    use provwasm_std::{AttributeMsgParams, MarkerMsgParams, NameMsgParams, ProvenanceMsgParams};
+    use provwasm_std::{NameMsgParams, Party, PartyType, ProvenanceMsgParams};
 
     const DEFAULT_INFO_NAME: &str = "admin";
     const DEFAULT_CONTRACT_NAME: &str = "payables.asset";
@@ -370,13 +378,10 @@ mod tests {
     const DEFAULT_FEE_COLLECTION_ADDRESS: &str = "feebucket";
     const DEFAULT_FEE_PERCENT: u64 = 75;
     const DEFAULT_ORACLE_ADDRESS: &str = "matt";
-    const DEFAULT_MARKER_ADDRESS: &str = "tp1cf4n639gawu07wmspwpg9wkry0zn6vhdppcnrv";
-    const DEFAULT_MARKER_DENOM: &str = "invoice-480d2352-7af8-11ec-88fb-9f79ab0248a0";
+    const DEFAULT_PAYABLE_UUID: &str = "200425c6-83ab-11ec-a486-eb4f069082c5";
     const DEFAULT_SCOPE_ID: &str = "scope1qpyq6g6j0tuprmyglw0hn2czfzsq6fcyl8";
+    const DEFAULT_PAYABLE_TOTAL: u128 = 1000;
     const DEFAULT_PAYABLE_DENOM: &str = "nhash";
-    const DEFAULT_PAYABLE_TOTAL: u128 = 10000;
-    // mock_env() creates this as the default contract address
-    const MOCK_COSMOS_CONTRACT_ADDRESS: &str = "cosmos2contract";
 
     #[test]
     fn test_valid_init() {
@@ -515,6 +520,8 @@ mod tests {
     fn test_register_valid_no_refund() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let response = execute(
             deps.as_mut(),
             mock_env(),
@@ -526,48 +533,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            6,
+            1,
             response.messages.len(),
-            "six messages expected: create marker, one grant marker, one finalize marker, one activate marker, one add attribute, and one fee exchange",
+            "one message expected during registration: a fee charge",
         );
         response.messages.into_iter().for_each(|msg| match msg.msg {
-            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
-                match params {
-                    // Handled in order in which they appear in the contract's execution
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::CreateMarker { coin, marker_type }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, coin.denom.as_str());
-                        assert_eq!(DEFAULT_MARKER_COIN_AMOUNT, coin.amount.u128());
-                        assert_eq!(MarkerType::Restricted, marker_type);
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::GrantMarkerAccess { denom, address, permissions }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                        assert_eq!(MOCK_COSMOS_CONTRACT_ADDRESS, address.as_str());
-                        assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
-                    },
-                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
-                        name,
-                        value,
-                        value_type,
-                        ..
-                    }) => {
-                        assert_eq!(DEFAULT_CONTRACT_NAME, name.as_str(), "expected the registered attribute name to be the contract name");
-                        assert_eq!(
-                            DEFAULT_SCOPE_ID.to_string(),
-                            from_binary::<String>(&value)
-                                .expect("unable to deserialize value from result"),
-                            "expected the registered value to the scope uuid",
-                        );
-                        assert_eq!(AttributeValueType::String, value_type, "expected the value type to be stored as a string");
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::FinalizeMarker { denom }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::ActivateMarker { denom }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                    },
-                    _ => panic!("unexpected provenance message type contaiend in result"),
-                }
-            },
             CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
                 assert_eq!(DEFAULT_FEE_COLLECTION_ADDRESS, to_address, "expected the fee send to go the default fee collection address");
                 assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
@@ -583,6 +553,8 @@ mod tests {
     fn test_register_valid_with_refund() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let response = execute(
             deps.as_mut(),
             mock_env(),
@@ -594,48 +566,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            7,
+            2,
             response.messages.len(),
-            "seven messages expected: create marker, one grant marker, one finalize marker, one activate marker, one add attribute, one fee exchange, and one fee refund",
+            "two messages expected during registration: a fee charge and a fee refund",
         );
         response.messages.into_iter().for_each(|msg| match msg.msg {
-            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
-                match params {
-                    // Handled in order in which they appear in the contract's execution
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::CreateMarker { coin, marker_type }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, coin.denom.as_str());
-                        assert_eq!(DEFAULT_MARKER_COIN_AMOUNT, coin.amount.u128());
-                        assert_eq!(MarkerType::Restricted, marker_type);
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::GrantMarkerAccess { denom, address, permissions }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                        assert_eq!(MOCK_COSMOS_CONTRACT_ADDRESS, address.as_str());
-                        assert_eq!(CONTRACT_MARKER_PERMISSIONS.to_vec(), permissions);
-                    },
-                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
-                                                       name,
-                                                       value,
-                                                       value_type,
-                                                       ..
-                                                   }) => {
-                        assert_eq!(DEFAULT_CONTRACT_NAME, name.as_str(), "expected the registered attribute name to be the contract name");
-                        assert_eq!(
-                            DEFAULT_SCOPE_ID.to_string(),
-                            from_binary::<String>(&value)
-                                .expect("unable to deserialize value from result"),
-                            "expected the registered value to the scope uuid",
-                        );
-                        assert_eq!(AttributeValueType::String, value_type, "expected the value type to be stored as a string");
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::FinalizeMarker { denom }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                    },
-                    ProvenanceMsgParams::Marker(MarkerMsgParams::ActivateMarker { denom }) => {
-                        assert_eq!(DEFAULT_MARKER_DENOM, denom.as_str());
-                    },
-                    _ => panic!("unexpected provenance message type contaiend in result"),
-                }
-            },
             CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
                 assert_eq!(1, amount.len(), "expected only one coin to be added to the fee transfer");
                 let coin = amount.first().unwrap();
@@ -659,6 +594,8 @@ mod tests {
     fn test_register_invalid_fund_denom() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -691,6 +628,8 @@ mod tests {
     fn test_register_no_funds_provided_and_fee_charge_non_zero() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -713,6 +652,8 @@ mod tests {
     fn test_register_insufficient_funds_provided() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -739,9 +680,58 @@ mod tests {
     }
 
     #[test]
+    fn test_register_scope_not_found() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        // Skip registering a fake scope, causing the contract to fail to find one
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap_err();
+        match failure {
+            Std(GenericErr { msg, .. }) => {
+                assert!(msg
+                    .contains("Querier system error: Cannot parse request: metadata not found in"))
+            }
+            _ => panic!("unexpected error received when the target scope was missing"),
+        }
+    }
+
+    #[test]
+    fn test_register_invalid_sender() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        // Register a scope with a different owner than the sender to simulate the situation
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, "another-guy"));
+        let _failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
+            default_register_payable(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(ContractError::Unauthorized, _failure),
+            "the error should show that the sender is unauthorized to make this request"
+        );
+    }
+
+    #[test]
     fn test_query_payable_after_register() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -756,20 +746,15 @@ mod tests {
             deps.as_ref(),
             mock_env(),
             QueryMsg::QueryPayable {
-                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
         let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
         assert_eq!(
-            DEFAULT_MARKER_ADDRESS,
-            payable_meta.marker_address.as_str(),
+            DEFAULT_PAYABLE_UUID,
+            payable_meta.payable_uuid.as_str(),
             "expected the default marker address to be returned"
-        );
-        assert_eq!(
-            DEFAULT_MARKER_DENOM,
-            payable_meta.marker_denom.as_str(),
-            "expected the default marker denom to be returned"
         );
         assert_eq!(
             DEFAULT_SCOPE_ID,
@@ -793,6 +778,8 @@ mod tests {
     fn test_execute_oracle_approval_success() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -808,35 +795,16 @@ mod tests {
             mock_env(),
             mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
             ExecuteMsg::OracleApproval {
-                marker_denom: DEFAULT_MARKER_DENOM.into(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             },
         )
         .unwrap();
-        assert_eq!(2, approval_response.messages.len(), "expected a message for the oracle attribute stamp a message for the oracle fee withdrawal");
+        assert_eq!(
+            1,
+            approval_response.messages.len(),
+            "expected a message for the oracle fee withdrawal"
+        );
         approval_response.messages.into_iter().for_each(|msg| match msg.msg {
-            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
-                match params {
-                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute { address, name, value, value_type, }) => {
-                        assert_eq!(DEFAULT_MARKER_ADDRESS, address.as_str(), "expected the attribute to be added to the marker");
-                        assert_eq!(
-                            DEFAULT_CONTRACT_NAME,
-                            name.as_str(),
-                            "the attribute name bound should be the contract name",
-                        );
-                        assert_eq!(
-                            DEFAULT_ORACLE_ADDRESS,
-                            from_binary::<String>(&value).unwrap().as_str(),
-                            "the attribute value should equate to the oracle's address",
-                        );
-                        assert_eq!(
-                            AttributeValueType::String,
-                            value_type,
-                            "the value type should be a string"
-                        );
-                    },
-                    _ => panic!("unexpected provenance message occurred during oracle approval"),
-                }
-            },
             CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
                 assert_eq!(
                     DEFAULT_ORACLE_ADDRESS,
@@ -862,7 +830,7 @@ mod tests {
             deps.as_ref(),
             mock_env(),
             QueryMsg::QueryPayable {
-                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
@@ -886,6 +854,8 @@ mod tests {
             },
         )
         .unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -901,56 +871,19 @@ mod tests {
             mock_env(),
             mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
             ExecuteMsg::OracleApproval {
-                marker_denom: DEFAULT_MARKER_DENOM.into(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             },
         )
         .unwrap();
-        assert_eq!(
-            1,
-            approval_response.messages.len(),
-            "expected only a single message to be sent for the oracle attribute registration"
+        assert!(
+            approval_response.messages.is_empty(),
+            "expected no messages, because the oracle should not have funds to withdraw"
         );
-        approval_response
-            .messages
-            .into_iter()
-            .for_each(|msg| match msg.msg {
-                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
-                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
-                        address,
-                        name,
-                        value,
-                        value_type,
-                    }) => {
-                        assert_eq!(
-                            DEFAULT_MARKER_ADDRESS,
-                            address.as_str(),
-                            "expected the attribute to be added to the marker"
-                        );
-                        assert_eq!(
-                            DEFAULT_CONTRACT_NAME,
-                            name.as_str(),
-                            "the attribute name bound should be the contract name",
-                        );
-                        assert_eq!(
-                            DEFAULT_ORACLE_ADDRESS,
-                            from_binary::<String>(&value).unwrap().as_str(),
-                            "the attribute value should equate to the oracle's address",
-                        );
-                        assert_eq!(
-                            AttributeValueType::String,
-                            value_type,
-                            "the value type should be a string"
-                        );
-                    }
-                    _ => panic!("unexpected provenance message occurred during oracle approval"),
-                },
-                _ => panic!("unexpected message occurred during oracle approval"),
-            });
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
             QueryMsg::QueryPayable {
-                marker_denom: DEFAULT_MARKER_DENOM.to_string(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
@@ -974,6 +907,8 @@ mod tests {
             },
         )
         .unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -993,7 +928,7 @@ mod tests {
                 &[coin(400, DEFAULT_ONBOARDING_DENOM.to_string())],
             ),
             ExecuteMsg::OracleApproval {
-                marker_denom: DEFAULT_MARKER_DENOM.into(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             },
         )
         .unwrap_err();
@@ -1007,6 +942,8 @@ mod tests {
     fn test_execute_oracle_approval_fails_for_invalid_sender_address() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -1024,7 +961,7 @@ mod tests {
             // allowed to make this call, so the execution should fail.
             mock_info(DEFAULT_FEE_COLLECTION_ADDRESS, &[]),
             ExecuteMsg::OracleApproval {
-                marker_denom: DEFAULT_MARKER_DENOM.into(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             },
         )
         .unwrap_err();
@@ -1038,6 +975,8 @@ mod tests {
     fn test_execute_oracle_approval_fails_for_duplicate_execution() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -1055,7 +994,7 @@ mod tests {
                 mock_env(),
                 mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
                 ExecuteMsg::OracleApproval {
-                    marker_denom: DEFAULT_MARKER_DENOM.into(),
+                    payable_uuid: DEFAULT_PAYABLE_UUID.into(),
                 },
             )
         };
@@ -1064,11 +1003,11 @@ mod tests {
         // Execute a second time, should be rejected because the oracle stamp has already been added
         let error = execute_as_oracle().unwrap_err();
         match error {
-            ContractError::DuplicateApproval { payable_denom } => {
+            ContractError::DuplicateApproval { payable_uuid } => {
                 assert_eq!(
-                    DEFAULT_MARKER_DENOM,
-                    payable_denom.as_str(),
-                    "the error message should include the marker denomination target"
+                    DEFAULT_PAYABLE_UUID,
+                    payable_uuid.as_str(),
+                    "the error message should include the payable's uuid"
                 );
             }
             _ => panic!("unexpected error occurred during execution"),
@@ -1079,6 +1018,8 @@ mod tests {
     fn test_execute_oracle_approval_fails_for_wrong_target_payable() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        deps.querier
+            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         execute(
             deps.as_mut(),
             mock_env(),
@@ -1095,16 +1036,16 @@ mod tests {
             mock_env(),
             mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
             ExecuteMsg::OracleApproval {
-                marker_denom: "some-other-denom".into(),
+                payable_uuid: "09798cd6-83ad-11ec-b485-eff659cf8387".into(),
             },
         )
         .unwrap_err();
         match error {
-            ContractError::PayableNotFound { target_denom } => {
+            ContractError::PayableNotFound { payable_uuid } => {
                 assert_eq!(
-                    "some-other-denom",
-                    target_denom.as_str(),
-                    "the incorrect denomination should be included in the error message"
+                    "09798cd6-83ad-11ec-b485-eff659cf8387",
+                    payable_uuid.as_str(),
+                    "the incorrect uuid should be included in the error message"
                 );
             }
             _ => panic!("unexpected error occurred during execution"),
@@ -1165,12 +1106,24 @@ mod tests {
     }
 
     fn default_register_payable() -> ExecuteMsg {
-        ExecuteMsg::RegisterPayableMarker {
-            marker_address: DEFAULT_MARKER_ADDRESS.into(),
-            marker_denom: DEFAULT_MARKER_DENOM.into(),
+        ExecuteMsg::RegisterPayable {
+            payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             scope_id: DEFAULT_SCOPE_ID.into(),
             payable_denom: DEFAULT_PAYABLE_DENOM.into(),
             payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
+        }
+    }
+
+    fn get_duped_scope(scope_id: &str, owner_address: &str) -> Scope {
+        Scope {
+            scope_id: scope_id.into(),
+            specification_id: "duped_spec_id".into(),
+            owners: vec![Party {
+                address: owner_address.into(),
+                role: PartyType::Owner,
+            }],
+            data_access: vec![],
+            value_owner_address: owner_address.into(),
         }
     }
 }

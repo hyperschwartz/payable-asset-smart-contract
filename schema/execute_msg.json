@@ -6,30 +6,26 @@
     {
       "type": "object",
       "required": [
-        "register_payable_marker"
+        "register_payable"
       ],
       "properties": {
-        "register_payable_marker": {
+        "register_payable": {
           "type": "object",
           "required": [
-            "marker_address",
-            "marker_denom",
             "payable_denom",
             "payable_total",
+            "payable_uuid",
             "scope_id"
           ],
           "properties": {
-            "marker_address": {
-              "type": "string"
-            },
-            "marker_denom": {
-              "type": "string"
-            },
             "payable_denom": {
               "type": "string"
             },
             "payable_total": {
               "$ref": "#/definitions/Uint128"
+            },
+            "payable_uuid": {
+              "type": "string"
             },
             "scope_id": {
               "type": "string"
@@ -48,10 +44,30 @@
         "oracle_approval": {
           "type": "object",
           "required": [
-            "marker_denom"
+            "payable_uuid"
           ],
           "properties": {
-            "marker_denom": {
+            "payable_uuid": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "make_payment"
+      ],
+      "properties": {
+        "make_payment": {
+          "type": "object",
+          "required": [
+            "payable_uuid"
+          ],
+          "properties": {
+            "payable_uuid": {
               "type": "string"
             }
           }

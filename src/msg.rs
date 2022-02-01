@@ -25,15 +25,17 @@ pub struct InitMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    RegisterPayableMarker {
-        marker_address: String,
-        marker_denom: String,
+    RegisterPayable {
+        payable_uuid: String,
         scope_id: String,
         payable_denom: String,
         payable_total: Uint128,
     },
     OracleApproval {
-        marker_denom: String,
+        payable_uuid: String,
+    },
+    MakePayment {
+        payable_uuid: String,
     },
 }
 
@@ -42,7 +44,7 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     QueryState {},
-    QueryPayable { marker_denom: String },
+    QueryPayable { payable_uuid: String },
 }
 
 /// A type alias for contract state.

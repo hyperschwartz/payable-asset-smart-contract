@@ -24,10 +24,10 @@
         "query_payable": {
           "type": "object",
           "required": [
-            "marker_denom"
+            "payable_uuid"
           ],
           "properties": {
-            "marker_denom": {
+            "payable_uuid": {
               "type": "string"
             }
           }

@@ -37,12 +37,18 @@ pub fn config_read(storage: &dyn Storage) -> ReadonlySingleton<State> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PayableMeta {
-    pub marker_address: Addr,
-    pub marker_denom: String,
+    // The unique identifier for the payable. Used for all requests that target a payable and the key to the Bucket
+    pub payable_uuid: String,
+    // The address of the scope created during onboarding of a payable
     pub scope_id: String,
+    // The denomination the payable accepts for payment
     pub payable_denom: String,
+    // The amount of payable_denom that the payable was originally created to reflect
     pub payable_total_owed: Uint128,
+    // The amount of payable_denom left unpaid on the payable
     pub payable_remaining_owed: Uint128,
+    // Whether or not the oracle has reviewed the structure of the payable and determine if it is
+    // a valid payable
     pub oracle_approved: bool,
 }
 

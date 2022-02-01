@@ -1,18 +1,10 @@
 use cosmwasm_std::{Decimal, Uint128};
-use provwasm_std::MarkerAccess;
 
 /// Global Variables
 pub const ONE_HUNDRED: Uint128 = Uint128::new(100);
-pub const DEFAULT_MARKER_COIN_AMOUNT: u128 = 1000;
-pub const CONTRACT_MARKER_PERMISSIONS: [MarkerAccess; 7] = [
-    MarkerAccess::Admin,
-    MarkerAccess::Burn,
-    MarkerAccess::Deposit,
-    MarkerAccess::Delete,
-    MarkerAccess::Mint,
-    MarkerAccess::Transfer,
-    MarkerAccess::Withdraw,
-];
+pub const PAYABLE_REGISTERED_KEY: &str = "PAYABLE_REGISTERED";
+pub const ORACLE_APPROVED_KEY: &str = "ORACLE_APPROVED";
+pub const PAYMENT_MADE_KEY: &str = "PAYMENT_MADE";
 
 /// Global Functions
 pub fn to_percent(dec: Decimal) -> String {
