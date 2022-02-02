@@ -32,6 +32,12 @@ pub enum ContractError {
         invalid_denoms: Vec<String>,
     },
 
+    #[error("Payable {payable_uuid} was invalid: {invalid_reason}")]
+    InvalidPayable {
+        payable_uuid: String,
+        invalid_reason: String,
+    },
+
     #[error("No funds of type {valid_denom} were provided")]
     NoFundsProvided { valid_denom: String },
 
