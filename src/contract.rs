@@ -1,3 +1,4 @@
+use chrono::Utc;
 use cosmwasm_std::{
     coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
     MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
@@ -10,7 +11,7 @@ use std::ops::Mul;
 use crate::error::ContractError;
 use crate::helper::{
     to_percent, ORACLE_APPROVED_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY,
-    PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY,
+    PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, PAYMENT_TIME,
     REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY, TOTAL_REMAINING_KEY,
 };
 use crate::make_payment::MakePaymentV1;
@@ -431,7 +432,8 @@ fn make_payment(
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
         .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed)
         .add_attribute(PAYER_KEY, &info.sender.to_string())
-        .add_attribute(PAYEE_KEY, &payee))
+        .add_attribute(PAYEE_KEY, &payee)
+        .add_attribute(PAYMENT_TIME, Utc::now().to_rfc3339()))
 }
 
 /// Called when migrating a contract instance to a new code ID.
@@ -1470,7 +1472,7 @@ mod tests {
                 _ => panic!("unexpected message sent during payment"),
             });
         assert_eq!(
-            7,
+            8,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -1532,6 +1534,13 @@ mod tests {
             payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
             "expected the payee to the be the default info name, as that was used to create the scope",
         );
+        // No valid way to compare timestamps because they're constantly iterating, so just ensure
+        // that the payment time value is set
+        payment_response
+            .attributes
+            .iter()
+            .find(|attr| attr.key.as_str() == PAYMENT_TIME)
+            .unwrap();
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -1627,7 +1636,7 @@ mod tests {
                 _ => panic!("unexpected message sent during payment"),
             });
         assert_eq!(
-            7,
+            8,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -1689,6 +1698,13 @@ mod tests {
             payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
             "expected the payee to the be the default info name, as that was used to create the scope",
         );
+        // No valid way to compare timestamps because they're constantly iterating, so just ensure
+        // that the payment time value is set
+        payment_response
+            .attributes
+            .iter()
+            .find(|attr| attr.key.as_str() == PAYMENT_TIME)
+            .unwrap();
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),

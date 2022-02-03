@@ -23,6 +23,7 @@ pub const PAYMENT_AMOUNT_KEY: &str = "payable_amount_paid"; // Value = Amount of
 pub const TOTAL_REMAINING_KEY: &str = "payable_total_remaining"; // Value = Amount remaining owed after payment (Long)
 pub const PAYER_KEY: &str = "payable_payer"; // Value = Bech32 address of the entity that made the payment (String)
 pub const PAYEE_KEY: &str = "payable_payee"; // Value = Bech32 address of th entity that received the payment (String)
+pub const PAYMENT_TIME: &str = "payable_payment_time"; // Value = UTC timestamp in an ISO 8601 compatible format
 
 /// Shared output attributes
 pub const PAYABLE_UUID_KEY: &str = "payable_uuid"; // Value = Payable UUID (String)
