@@ -10,8 +10,8 @@ use std::ops::Mul;
 use crate::error::ContractError;
 use crate::helper::{
     to_percent, ORACLE_APPROVED_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY,
-    PAYABLE_UUID_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, REFUND_AMOUNT_KEY,
-    REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY, TOTAL_REMAINING_KEY,
+    PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY,
+    REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY, TOTAL_REMAINING_KEY,
 };
 use crate::make_payment::MakePaymentV1;
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
@@ -412,8 +412,9 @@ fn make_payment(
                 .into(),
         });
     }
+    let payee = scope_owners.first().unwrap().address.clone();
     let payment_message = CosmosMsg::Bank(BankMsg::Send {
-        to_address: scope_owners.first().unwrap().address.clone(),
+        to_address: payee.clone(),
         amount: vec![coin(payment_amount, &target_payable.payable_denom)],
     });
     // Subtract payment amount from tracked total
@@ -428,7 +429,9 @@ fn make_payment(
         .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
         .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid)
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
-        .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed))
+        .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed)
+        .add_attribute(PAYER_KEY, &info.sender.to_string())
+        .add_attribute(PAYEE_KEY, &payee))
 }
 
 /// Called when migrating a contract instance to a new code ID.
@@ -1467,7 +1470,7 @@ mod tests {
                 _ => panic!("unexpected message sent during payment"),
             });
         assert_eq!(
-            5,
+            7,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -1513,6 +1516,21 @@ mod tests {
             "0",
             payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
             "expected the total remaining key to be added to the response and equate to zero because the payable was paid off",
+        );
+        assert_eq!(
+            "payer-guy",
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYER_KEY)
+                .unwrap()
+                .value,
+            "expected the payer to be the value input as the sender",
+        );
+        assert_eq!(
+            DEFAULT_INFO_NAME,
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
+            "expected the payee to the be the default info name, as that was used to create the scope",
         );
         let payable_binary = query(
             deps.as_ref(),
@@ -1609,7 +1627,7 @@ mod tests {
                 _ => panic!("unexpected message sent during payment"),
             });
         assert_eq!(
-            5,
+            7,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -1655,6 +1673,21 @@ mod tests {
             "100",
             payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
             "expected the total remaining key to be added to the response and equate to 100 because that was the amount unpaid",
+        );
+        assert_eq!(
+            "payer-guy",
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYER_KEY)
+                .unwrap()
+                .value,
+            "expected the payer to be the value input as the sender",
+        );
+        assert_eq!(
+            DEFAULT_INFO_NAME,
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
+            "expected the payee to the be the default info name, as that was used to create the scope",
         );
         let payable_binary = query(
             deps.as_ref(),
