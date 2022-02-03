@@ -9,7 +9,9 @@ use std::ops::Mul;
 
 use crate::error::ContractError;
 use crate::helper::{
-    to_percent, PAYABLE_REGISTERED_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
+    to_percent, ORACLE_APPROVED_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY,
+    PAYABLE_UUID_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, REFUND_AMOUNT_KEY,
+    REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY, TOTAL_REMAINING_KEY,
 };
 use crate::make_payment::MakePaymentV1;
 use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
@@ -41,6 +43,7 @@ pub fn instantiate(
 
     // Create and save contract config state. The name is used for setting attributes on user accounts
     config(deps.storage).save(&State {
+        payable_type: msg.payable_type.clone(),
         contract_name: msg.contract_name.clone(),
         onboarding_cost: Uint128::new(msg.onboarding_cost.as_str().parse::<u128>().unwrap()),
         onboarding_denom: msg.onboarding_denom.clone(),
@@ -49,6 +52,8 @@ pub fn instantiate(
             .addr_validate(msg.fee_collection_address.as_str())?,
         fee_percent: msg.fee_percent,
         oracle_address: deps.api.addr_validate(msg.oracle_address.as_str())?,
+        // Always default to non-local if the value is not provided
+        is_local: msg.is_local.unwrap_or(false),
     })?;
 
     // Create a message that will bind a restricted name to the contract address.
@@ -90,6 +95,7 @@ pub fn execute(
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     match msg {
         ExecuteMsg::RegisterPayable {
+            payable_type,
             payable_uuid,
             scope_id,
             payable_denom,
@@ -98,6 +104,7 @@ pub fn execute(
             deps,
             info,
             RegisterPayableMarkerV1 {
+                payable_type,
                 payable_uuid,
                 scope_id,
                 payable_denom,
@@ -119,6 +126,15 @@ fn register_payable(
     register: RegisterPayableMarkerV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     let state = config(deps.storage).load()?;
+    if state.payable_type != register.payable_type {
+        return Err(ContractError::InvalidPayable {
+            payable_uuid: register.payable_uuid,
+            invalid_reason: format!(
+                "this contract accepts payables of type [{}], but received type [{}]",
+                state.payable_type, register.payable_type
+            ),
+        });
+    }
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
@@ -126,9 +142,9 @@ fn register_payable(
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
         messages.push(fee_message);
         attributes.push(Attribute::new(
-            "oracle_funds_kept",
+            ORACLE_FUNDS_KEPT,
             format!(
-                "{}{}",
+                "{}/{}",
                 fee_charge_response.oracle_fee_amount_kept, state.onboarding_denom
             ),
         ));
@@ -136,29 +152,39 @@ fn register_payable(
     if let Some(refund_message) = fee_charge_response.fee_refund_message {
         messages.push(refund_message);
         attributes.push(Attribute::new(
-            "refund_amount",
+            REFUND_AMOUNT_KEY,
             format!(
-                "{}{}",
+                "{}/{}",
                 fee_charge_response.refund_amount, state.onboarding_denom
             ),
         ));
     }
     // If the sender's address is not listed as an owner address on the target scope for the payable,
-    // then they are not authorized to register this payable
-    if get_scope_by_id(&deps.querier, &register.scope_id)?
-        .owners
-        .into_iter()
-        .filter(|owner| owner.address == info.sender)
-        .count()
-        == 0
+    // then they are not authorized to register this payable.
+    // Skip this step locally - creating a scope is an unnecessary piece of testing this
+    if !state.is_local
+        && get_scope_by_id(&deps.querier, &register.scope_id)?
+            .owners
+            .into_iter()
+            .filter(|owner| owner.address == info.sender)
+            .count()
+            == 0
     {
         return Err(ContractError::Unauthorized);
     }
     // Ensure that this payable registration can be picked up by event key
+    attributes.push(Attribute::new(PAYABLE_REGISTERED_KEY, ""));
+    attributes.push(Attribute::new(PAYABLE_TYPE_KEY, &register.payable_type));
+    attributes.push(Attribute::new(PAYABLE_UUID_KEY, &register.payable_uuid));
     attributes.push(Attribute::new(
-        PAYABLE_REGISTERED_KEY.to_string(),
-        &register.payable_uuid,
+        TOTAL_OWED_KEY,
+        &register.payable_total.to_string(),
     ));
+    attributes.push(Attribute::new(
+        REGISTERED_DENOM_KEY,
+        &register.payable_denom,
+    ));
+    attributes.push(Attribute::new(SCOPE_ID_KEY, &register.scope_id));
     let payable_meta = PayableMeta {
         payable_uuid: register.payable_uuid,
         scope_id: register.scope_id,
@@ -257,7 +283,7 @@ fn validate_fee_params_get_messages(
         fee_charge_message,
         fee_refund_message,
         refund_amount: refund_amount.u128(),
-        oracle_fee_amount_kept: (funds_sent - onboarding_cost).u128(),
+        oracle_fee_amount_kept: (onboarding_cost - fee_collected_amount).u128(),
     })
 }
 
@@ -307,7 +333,11 @@ fn oracle_approval(
     }
     target_payable.oracle_approved = true;
     payables_bucket.save(oracle_approval.payable_uuid.as_bytes(), &target_payable)?;
-    Ok(Response::new().add_messages(messages))
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute(ORACLE_APPROVED_KEY, "")
+        .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
+        .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid))
 }
 
 fn make_payment(
@@ -318,13 +348,12 @@ fn make_payment(
     let mut payables_bucket = payable_meta_storage(deps.storage);
     let mut target_payable = match payables_bucket.load(make_payment.payable_uuid.as_bytes()) {
         Ok(meta) => {
-            // TODO: Enable oracle approval check once that becomes streamlined in the application flow
-            // if !meta.oracle_approved {
-            //     return Err(ContractError::NotReadyForPayment {
-            //         payable_uuid: meta.payable_uuid,
-            //         not_ready_reason: "Payable missing oracle approval".into(),
-            //     });
-            // }
+            if !meta.oracle_approved {
+                return Err(ContractError::NotReadyForPayment {
+                    payable_uuid: meta.payable_uuid,
+                    not_ready_reason: "Payable missing oracle approval".into(),
+                });
+            }
             meta
         }
         Err(_) => {
@@ -391,9 +420,13 @@ fn make_payment(
     target_payable.payable_remaining_owed =
         (target_payable.payable_remaining_owed.u128() - payment_amount).into();
     payables_bucket.save(target_payable.payable_uuid.as_bytes(), &target_payable)?;
+    // Load state to derive payable type
+    let state = config(deps.storage).load()?;
     Ok(Response::new()
         .add_message(payment_message)
-        .add_attribute(PAYMENT_MADE_KEY, target_payable.payable_uuid)
+        .add_attribute(PAYMENT_MADE_KEY, "")
+        .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
+        .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid)
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
         .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed))
 }
@@ -416,6 +449,7 @@ mod tests {
     use provwasm_std::{NameMsgParams, Party, PartyType, ProvenanceMsgParams};
 
     const DEFAULT_INFO_NAME: &str = "admin";
+    const DEFAULT_PAYABLE_TYPE: &str = "invoice";
     const DEFAULT_CONTRACT_NAME: &str = "payables.asset";
     const DEFAULT_ONBOARDING_COST: &str = "100";
     const DEFAULT_ONBOARDING_DENOM: &str = "nhash";
@@ -591,6 +625,82 @@ mod tests {
             },
             _ => panic!("unexpected response message type"),
         });
+        assert_eq!(
+            7,
+            response.attributes.len(),
+            "expected all registration attributes to be recorded"
+        );
+        assert_eq!(
+            "",
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_REGISTERED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_REGISTERED_KEY should be present with no value",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_SCOPE_ID,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == SCOPE_ID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the SCOPE_ID_KEY should equate to the input scope id",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == TOTAL_OWED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_DENOM,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == REGISTERED_DENOM_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
+        );
+        assert_eq!(
+            "25/nhash",
+            response.attributes.iter().find(|attr| attr.key.as_str() == ORACLE_FUNDS_KEPT).unwrap().value.as_str(),
+            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
+        );
     }
 
     #[test]
@@ -632,14 +742,130 @@ mod tests {
             },
             _ => panic!("unexpected response message type"),
         });
+        assert_eq!(
+            8,
+            response.attributes.len(),
+            "expected all registration attributes to be recorded"
+        );
+        assert_eq!(
+            "",
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_REGISTERED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_REGISTERED_KEY should be present with no value",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_SCOPE_ID,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == SCOPE_ID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the SCOPE_ID_KEY should equate to the input scope id",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == TOTAL_OWED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_DENOM,
+            response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == REGISTERED_DENOM_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
+        );
+        assert_eq!(
+            "25/nhash",
+            response.attributes.iter().find(|attr| attr.key.as_str() == ORACLE_FUNDS_KEPT).unwrap().value.as_str(),
+            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
+        );
+        assert_eq!(
+            "50/nhash",
+            response.attributes.iter().find(|attr| attr.key.as_str() == REFUND_AMOUNT_KEY).unwrap().value.as_str(),
+            "the refund amount should equal the amount provided over the onboarding cost (150 - 100)",
+        );
+    }
+
+    #[test]
+    fn test_register_invalid_payable_type() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        let failure = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(DEFAULT_INFO_NAME, &[coin(100, DEFAULT_ONBOARDING_DENOM)]),
+            ExecuteMsg::RegisterPayable {
+                payable_type: "wrong-payable-type".into(),
+                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
+                scope_id: DEFAULT_SCOPE_ID.into(),
+                payable_denom: DEFAULT_PAYABLE_DENOM.into(),
+                payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
+            },
+        )
+        .unwrap_err();
+        match failure {
+            ContractError::InvalidPayable {
+                payable_uuid,
+                invalid_reason,
+            } => {
+                assert_eq!(
+                    DEFAULT_PAYABLE_UUID,
+                    payable_uuid.as_str(),
+                    "expected the attempted payable uuid to be input"
+                );
+                assert_eq!(
+                    "this contract accepts payables of type [invoice], but received type [wrong-payable-type]",
+                    invalid_reason,
+                    "expected the correct message to be added to the message",
+                );
+            }
+            _ => panic!("unexpected contract error encountered"),
+        };
     }
 
     #[test]
     fn test_register_invalid_fund_denom() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -672,8 +898,6 @@ mod tests {
     fn test_register_no_funds_provided_and_fee_charge_non_zero() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -696,8 +920,6 @@ mod tests {
     fn test_register_insufficient_funds_provided() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
         let failure = execute(
             deps.as_mut(),
             mock_env(),
@@ -870,6 +1092,44 @@ mod tests {
             },
             _ => panic!("unexpected message occurred during oracle approval"),
         });
+        assert_eq!(
+            3,
+            approval_response.attributes.len(),
+            "expected all attributes to be added"
+        );
+        assert_eq!(
+            "",
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == ORACLE_APPROVED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the oracle approved key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable type key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable uuid key to be added as an attribute",
+        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -922,6 +1182,44 @@ mod tests {
         assert!(
             approval_response.messages.is_empty(),
             "expected no messages, because the oracle should not have funds to withdraw"
+        );
+        assert_eq!(
+            3,
+            approval_response.attributes.len(),
+            "expected all attributes to be added"
+        );
+        assert_eq!(
+            "",
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == ORACLE_APPROVED_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the oracle approved key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable type key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            approval_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable uuid key to be added as an attribute",
         );
         let payable_binary = query(
             deps.as_ref(),
@@ -1168,6 +1466,54 @@ mod tests {
                 }
                 _ => panic!("unexpected message sent during payment"),
             });
+        assert_eq!(
+            5,
+            payment_response.attributes.len(),
+            "expected all attributes to be added to the response"
+        );
+        assert_eq!(
+            "",
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYMENT_MADE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payment made key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable type key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYMENT_AMOUNT_KEY).unwrap().value,
+            "expected the payment amount key to be added to the response and equate to the total owed",
+        );
+        assert_eq!(
+            "0",
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
+            "expected the total remaining key to be added to the response and equate to zero because the payable was paid off",
+        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -1262,6 +1608,54 @@ mod tests {
                 }
                 _ => panic!("unexpected message sent during payment"),
             });
+        assert_eq!(
+            5,
+            payment_response.attributes.len(),
+            "expected all attributes to be added to the response"
+        );
+        assert_eq!(
+            "",
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYMENT_MADE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payment made key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable type key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            payment_response
+                .attributes
+                .iter()
+                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
+                .unwrap()
+                .value
+                .as_str(),
+            "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            (DEFAULT_PAYABLE_TOTAL - 100).to_string(),
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYMENT_AMOUNT_KEY).unwrap().value,
+            "expected the payment amount key to be added to the response and equate to the total owed - 100",
+        );
+        assert_eq!(
+            "100",
+            payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
+            "expected the total remaining key to be added to the response and equate to 100 because that was the amount unpaid",
+        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -1561,12 +1955,14 @@ mod tests {
     struct InstArgs {
         env: Env,
         info: MessageInfo,
+        payable_type: String,
         contract_name: String,
         onboarding_cost: String,
         onboarding_denom: String,
         fee_collection_address: String,
         fee_percent: Decimal,
         oracle_address: String,
+        is_local: bool,
     }
 
     impl Default for InstArgs {
@@ -1574,12 +1970,14 @@ mod tests {
             InstArgs {
                 env: mock_env(),
                 info: mock_info(DEFAULT_INFO_NAME, &[]),
+                payable_type: DEFAULT_PAYABLE_TYPE.into(),
                 contract_name: DEFAULT_CONTRACT_NAME.into(),
                 onboarding_cost: DEFAULT_ONBOARDING_COST.into(),
                 onboarding_denom: DEFAULT_ONBOARDING_DENOM.into(),
                 fee_collection_address: DEFAULT_FEE_COLLECTION_ADDRESS.into(),
                 fee_percent: Decimal::percent(DEFAULT_FEE_PERCENT),
                 oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
+                is_local: false,
             }
         }
     }
@@ -1601,18 +1999,21 @@ mod tests {
             args.env,
             args.info,
             InitMsg {
+                payable_type: args.payable_type,
                 contract_name: args.contract_name,
                 onboarding_cost: args.onboarding_cost,
                 onboarding_denom: args.onboarding_denom,
                 fee_collection_address: args.fee_collection_address,
                 fee_percent: args.fee_percent,
                 oracle_address: args.oracle_address,
+                is_local: Some(args.is_local),
             },
         )
     }
 
     fn default_register_payable() -> ExecuteMsg {
         ExecuteMsg::RegisterPayable {
+            payable_type: DEFAULT_PAYABLE_TYPE.into(),
             payable_uuid: DEFAULT_PAYABLE_UUID.into(),
             scope_id: DEFAULT_SCOPE_ID.into(),
             payable_denom: DEFAULT_PAYABLE_DENOM.into(),

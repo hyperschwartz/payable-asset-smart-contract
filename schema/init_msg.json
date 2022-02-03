@@ -9,7 +9,8 @@
     "fee_percent",
     "onboarding_cost",
     "onboarding_denom",
-    "oracle_address"
+    "oracle_address",
+    "payable_type"
   ],
   "properties": {
     "contract_name": {
@@ -21,6 +22,12 @@
     "fee_percent": {
       "$ref": "#/definitions/Decimal"
     },
+    "is_local": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "onboarding_cost": {
       "type": "string"
     },
@@ -28,6 +35,9 @@
       "type": "string"
     },
     "oracle_address": {
+      "type": "string"
+    },
+    "payable_type": {
       "type": "string"
     }
   },

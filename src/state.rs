@@ -13,6 +13,8 @@ pub static PAYABLE_META_KEY: &[u8] = b"payable_meta";
 /// Fields that comprise the smart contract state
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct State {
+    // The type of payable that this contract handles
+    pub payable_type: String,
     // Name of the contract that is tagged on various things
     pub contract_name: String,
     // Cost to onboard each payable
@@ -25,6 +27,8 @@ pub struct State {
     pub fee_percent: Decimal,
     // Address of the oracle application that can withdraw excess fees after fee percent is removed from onboarding_cost
     pub oracle_address: Addr,
+    // Whether nor not the contract is running locally.  Skips some important checks if enabled, which expedites testing
+    pub is_local: bool,
 }
 
 pub fn config(storage: &mut dyn Storage) -> Singleton<State> {

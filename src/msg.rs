@@ -7,6 +7,8 @@ use crate::state::State;
 /// A message sent to initialize the contract state.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
+    // The type of payable that this contract handles. All incoming registration requests will validate that the source is this type.
+    pub payable_type: String,
     // Name of the contract that is tagged on various things
     pub contract_name: String,
     // Cost to onboard each payable
@@ -19,6 +21,8 @@ pub struct InitMsg {
     pub fee_percent: Decimal,
     // Address of the oracle application that can withdraw excess fees after fee percent is removed from onboarding_cost
     pub oracle_address: String,
+    // Whether or not this contract should have assistance for local environments
+    pub is_local: Option<bool>,
 }
 
 /// A message sent to register a name with the name service
@@ -26,6 +30,7 @@ pub struct InitMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     RegisterPayable {
+        payable_type: String,
         payable_uuid: String,
         scope_id: String,
         payable_denom: String,
