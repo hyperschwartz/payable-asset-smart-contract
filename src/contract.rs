@@ -399,21 +399,9 @@ fn make_payment(
             amount_provided: payment_amount,
         });
     }
-    let scope_owners: Vec<Party> =
-        get_scope_by_id(&deps.querier, target_payable.scope_id.as_str())?
-            .owners
-            .into_iter()
-            .filter(|owner| owner.role == PartyType::Owner)
-            .collect();
-    // TODO: Handle multiple owners if needed, or at least confirm this strategy's sane usage
-    if scope_owners.len() != 1 {
-        return Err(ContractError::InvalidPayable {
-            payable_uuid: target_payable.payable_uuid,
-            invalid_reason: "Payable has multiple owners. Only single ownership is supported"
-                .into(),
-        });
-    }
-    let payee = scope_owners.first().unwrap().address.clone();
+
+    let scope = get_scope_by_id(&deps.querier, target_payable.scope_id.as_str())?;
+    let payee = scope.value_owner_address;
     let payment_message = CosmosMsg::Bank(BankMsg::Send {
         to_address: payee.clone(),
         amount: vec![coin(payment_amount, &target_payable.payable_denom)],
