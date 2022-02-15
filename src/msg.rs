@@ -1,5 +1,4 @@
-use cosmwasm_std::{CosmosMsg, CustomMsg, Decimal, Uint128};
-use provwasm_std::{ProvenanceMsg, ProvenanceMsgParams, ProvenanceRoute};
+use cosmwasm_std::{Decimal, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -60,35 +59,3 @@ pub type QueryResponse = State;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct MigrateMsg {}
-
-/// FIXME: This will be fixed in 1.0.1-beta of provwasm.  This struct exists as a clone of
-/// FIXME: ProvenanceMsg, but implements CustomMsg.  CosmWasm 1.0.0-betaX does not allow exported
-/// FIXME: entry_point functions to expose Response<X> values, where X does not implement CustomMsg.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub struct ProvenanceMsgV2 {
-    pub route: ProvenanceRoute,
-    pub params: ProvenanceMsgParams,
-    pub version: String,
-}
-impl ProvenanceMsgV2 {
-    pub fn from_cosmos(msg: CosmosMsg<ProvenanceMsg>) -> CosmosMsg<ProvenanceMsgV2> {
-        match msg {
-            CosmosMsg::Custom(provenance_msg) => {
-                CosmosMsg::Custom(ProvenanceMsgV2 {
-                    route: provenance_msg.route,
-                    params: provenance_msg.params,
-                    version: provenance_msg.version,
-                })
-            },
-            _ => panic!("unexpected message type provided to converter"),
-        }
-    }
-
-    pub fn from_prov(msg: ProvenanceMsg) -> ProvenanceMsgV2 {
-        ProvenanceMsgV2 { route: msg.route, params: msg.params, version: msg.version, }
-    }
-}
-/// Note: The linter does not like this, but it isn't seeing the derived JsonSchema, so it compiles
-/// fine.
-impl CustomMsg for ProvenanceMsgV2 {}

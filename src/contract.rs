@@ -1,8 +1,10 @@
 use cosmwasm_std::{
-    coin, entry_point, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
-    MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
+    coin, entry_point, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut,
+    Env, MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
 };
-use provwasm_std::{bind_name, NameBinding, ProvenanceQuerier, ProvenanceQuery, Scope};
+use provwasm_std::{
+    bind_name, NameBinding, ProvenanceMsg, ProvenanceQuerier, ProvenanceQuery, Scope,
+};
 use std::ops::Mul;
 
 use crate::error::ContractError;
@@ -12,7 +14,7 @@ use crate::helper::{
     REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY, TOTAL_REMAINING_KEY,
 };
 use crate::make_payment::MakePaymentV1;
-use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, ProvenanceMsgV2, QueryMsg};
+use crate::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::oracle_approval::OracleApprovalV1;
 use crate::register_payable::RegisterPayableMarkerV1;
 use crate::state::{
@@ -26,7 +28,7 @@ pub fn instantiate(
     env: Env,
     info: MessageInfo,
     msg: InitMsg,
-) -> Result<Response<ProvenanceMsgV2>, StdError> {
+) -> Result<Response<ProvenanceMsg>, StdError> {
     // Ensure no funds were sent with the message
     if !info.funds.is_empty() {
         let err = "purchase funds are not allowed to be sent during init";
@@ -56,11 +58,11 @@ pub fn instantiate(
     })?;
 
     // Create a message that will bind a restricted name to the contract address.
-    let bind_name_msg = ProvenanceMsgV2::from_cosmos(bind_name(
+    let bind_name_msg = bind_name(
         &msg.contract_name,
         env.contract.address,
         NameBinding::Restricted,
-    )?);
+    )?;
 
     // Dispatch messages and emit event attributes
     Ok(Response::new()
@@ -93,7 +95,7 @@ pub fn execute(
     _env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
-) -> Result<Response<ProvenanceMsgV2>, ContractError> {
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     match msg {
         ExecuteMsg::RegisterPayable {
             payable_type,
@@ -125,7 +127,7 @@ fn register_payable(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     register: RegisterPayableMarkerV1,
-) -> Result<Response<ProvenanceMsgV2>, ContractError> {
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     let state = config(deps.storage).load()?;
     if state.payable_type != register.payable_type {
         return Err(ContractError::InvalidPayable {
@@ -136,7 +138,7 @@ fn register_payable(
             ),
         });
     }
-    let mut messages: Vec<CosmosMsg<ProvenanceMsgV2>> = vec![];
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
     // TODO: Tag the payable uuid on the scope as an attribute
@@ -209,8 +211,8 @@ fn get_scope_by_id(querier: &QuerierWrapper<ProvenanceQuery>, scope_id: &str) ->
 }
 
 struct FeeChargeResponse {
-    fee_charge_message: Option<CosmosMsg<ProvenanceMsgV2>>,
-    fee_refund_message: Option<CosmosMsg<ProvenanceMsgV2>>,
+    fee_charge_message: Option<CosmosMsg<ProvenanceMsg>>,
+    fee_refund_message: Option<CosmosMsg<ProvenanceMsg>>,
     refund_amount: u128,
     oracle_fee_amount_kept: u128,
 }
@@ -295,8 +297,8 @@ fn oracle_approval(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     oracle_approval: OracleApprovalV1,
-) -> Result<Response<ProvenanceMsgV2>, ContractError> {
-    let mut messages: Vec<CosmosMsg<ProvenanceMsgV2>> = vec![];
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     // Oracle approval should not require any funds
     if !info.funds.is_empty() {
         return Err(ContractError::FundsPresent);
@@ -348,7 +350,7 @@ fn make_payment(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     make_payment: MakePaymentV1,
-) -> Result<Response<ProvenanceMsgV2>, ContractError> {
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     let mut payables_bucket = payable_meta_storage(deps.storage);
     let mut target_payable = match payables_bucket.load(make_payment.payable_uuid.as_bytes()) {
         Ok(meta) => {
@@ -428,7 +430,11 @@ fn make_payment(
 
 /// Called when migrating a contract instance to a new code ID.
 #[entry_point]
-pub fn migrate(_deps: DepsMut<ProvenanceQuery>, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate(
+    _deps: DepsMut<ProvenanceQuery>,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> Result<Response, ContractError> {
     Ok(Response::default())
 }
 
@@ -440,7 +446,7 @@ mod tests {
     use crate::error::ContractError::Std;
     use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::StdError::GenericErr;
-    use cosmwasm_std::{from_binary, CosmosMsg, Decimal, Addr};
+    use cosmwasm_std::{from_binary, Addr, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{NameMsgParams, Party, PartyType, ProvenanceMsgParams};
 
@@ -2019,7 +2025,7 @@ mod tests {
     fn test_instantiate(
         deps: DepsMut<ProvenanceQuery>,
         args: InstArgs,
-    ) -> Result<Response<ProvenanceMsgV2>, StdError> {
+    ) -> Result<Response<ProvenanceMsg>, StdError> {
         instantiate(
             deps,
             args.env,
