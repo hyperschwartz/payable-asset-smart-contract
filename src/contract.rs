@@ -1,8 +1,10 @@
 use cosmwasm_std::{
-    coin, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut, Env,
-    MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
+    coin, entry_point, to_binary, Attribute, BankMsg, Binary, CosmosMsg, Decimal, Deps, DepsMut,
+    Env, MessageInfo, QuerierWrapper, Response, StdError, StdResult, Uint128,
 };
-use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuerier, Scope};
+use provwasm_std::{
+    bind_name, NameBinding, ProvenanceMsg, ProvenanceQuerier, ProvenanceQuery, Scope,
+};
 use std::ops::Mul;
 
 use crate::error::ContractError;
@@ -20,8 +22,9 @@ use crate::state::{
 };
 
 /// Initialize the contract
+#[entry_point]
 pub fn instantiate(
-    deps: DepsMut,
+    deps: DepsMut<ProvenanceQuery>,
     env: Env,
     info: MessageInfo,
     msg: InitMsg,
@@ -68,7 +71,8 @@ pub fn instantiate(
 }
 
 /// Query contract state.
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+#[entry_point]
+pub fn query(deps: Deps<ProvenanceQuery>, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::QueryState {} => {
             let state = config_read(deps.storage).load()?;
@@ -85,8 +89,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
 }
 
 /// Handle purchase messages.
+#[entry_point]
 pub fn execute(
-    deps: DepsMut,
+    deps: DepsMut<ProvenanceQuery>,
     _env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
@@ -119,7 +124,7 @@ pub fn execute(
 }
 
 fn register_payable(
-    deps: DepsMut,
+    deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     register: RegisterPayableMarkerV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
@@ -201,7 +206,7 @@ fn register_payable(
         .add_attributes(attributes))
 }
 
-fn get_scope_by_id(querier: &QuerierWrapper, scope_id: &str) -> StdResult<Scope> {
+fn get_scope_by_id(querier: &QuerierWrapper<ProvenanceQuery>, scope_id: &str) -> StdResult<Scope> {
     ProvenanceQuerier::new(querier).get_scope(scope_id)
 }
 
@@ -289,7 +294,7 @@ fn validate_fee_params_get_messages(
 }
 
 fn oracle_approval(
-    deps: DepsMut,
+    deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     oracle_approval: OracleApprovalV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
@@ -342,7 +347,7 @@ fn oracle_approval(
 }
 
 fn make_payment(
-    deps: DepsMut,
+    deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     make_payment: MakePaymentV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
@@ -403,7 +408,7 @@ fn make_payment(
     let scope = get_scope_by_id(&deps.querier, target_payable.scope_id.as_str())?;
     let payee = scope.value_owner_address;
     let payment_message = CosmosMsg::Bank(BankMsg::Send {
-        to_address: payee.clone(),
+        to_address: payee.to_string(),
         amount: vec![coin(payment_amount, &target_payable.payable_denom)],
     });
     // Subtract payment amount from tracked total
@@ -420,11 +425,16 @@ fn make_payment(
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
         .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed)
         .add_attribute(PAYER_KEY, &info.sender.to_string())
-        .add_attribute(PAYEE_KEY, &payee))
+        .add_attribute(PAYEE_KEY, payee.as_str()))
 }
 
 /// Called when migrating a contract instance to a new code ID.
-pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+#[entry_point]
+pub fn migrate(
+    _deps: DepsMut<ProvenanceQuery>,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> Result<Response, ContractError> {
     Ok(Response::default())
 }
 
@@ -436,7 +446,7 @@ mod tests {
     use crate::error::ContractError::Std;
     use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::StdError::GenericErr;
-    use cosmwasm_std::{from_binary, CosmosMsg, Decimal};
+    use cosmwasm_std::{from_binary, Addr, CosmosMsg, Decimal};
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{NameMsgParams, Party, PartyType, ProvenanceMsgParams};
 
@@ -2013,7 +2023,7 @@ mod tests {
     }
 
     fn test_instantiate(
-        deps: DepsMut,
+        deps: DepsMut<ProvenanceQuery>,
         args: InstArgs,
     ) -> Result<Response<ProvenanceMsg>, StdError> {
         instantiate(
@@ -2048,11 +2058,11 @@ mod tests {
             scope_id: scope_id.into(),
             specification_id: "duped_spec_id".into(),
             owners: vec![Party {
-                address: owner_address.into(),
+                address: Addr::unchecked(owner_address),
                 role: PartyType::Owner,
             }],
             data_access: vec![],
-            value_owner_address: owner_address.into(),
+            value_owner_address: Addr::unchecked(owner_address),
         }
     }
 }
