@@ -130,7 +130,7 @@ impl ValidatedMsg for QueryMsg {
             QueryMsg::QueryState {} => (),
             QueryMsg::QueryPayable { payable_uuid } => {
                 if payable_uuid.is_empty() {
-                    invalid_fields.push("query_payable");
+                    invalid_fields.push("payable_uuid");
                 }
             }
         };
@@ -153,5 +153,223 @@ pub struct MigrateMsg {
 impl ValidatedMsg for MigrateMsg {
     fn validate(&self) -> Result<(), ContractError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::{Decimal, Uint128};
+    use crate::core::error::ContractError;
+    use crate::core::msg::{ExecuteMsg, InitMsg};
+    use crate::core::msg::ExecuteMsg::{MakePayment, OracleApproval};
+    use crate::core::msg::QueryMsg::{QueryPayable, QueryState};
+    use crate::util::traits::ValidatedMsg;
+
+    #[test]
+    fn test_valid_init_msg() {
+        get_valid_init_msg().validate().unwrap();
+    }
+
+    #[test]
+    fn test_invalid_init_msg_payable_type() {
+        let mut msg = get_valid_init_msg();
+        // Empty string bad
+        msg.payable_type = String::new();
+        test_invalid_msg(&msg, "payable_type");
+    }
+
+    #[test]
+    fn test_invalid_init_msg_contract_name() {
+        let mut msg = get_valid_init_msg();
+        // Empty string bad
+        msg.contract_name = String::new();
+        test_invalid_msg(&msg, "contract_name");
+    }
+
+    #[test]
+    fn test_invalid_init_msg_onboarding_cost() {
+        let mut msg = get_valid_init_msg();
+        // Non-numbers bad
+        msg.onboarding_cost = "word".to_string();
+        test_invalid_msg(&msg, "onboarding_cost");
+        // Negative numbers bad
+        msg.onboarding_cost = "-1".to_string();
+        test_invalid_msg(&msg, "onboarding_cost");
+    }
+
+    #[test]
+    fn test_invalid_init_msg_fee_collection_address() {
+        let mut msg = get_valid_init_msg();
+        // Empty string bad
+        msg.fee_collection_address = String::new();
+        test_invalid_msg(&msg, "fee_collection_address");
+    }
+
+    #[test]
+    fn test_invalid_init_msg_fee_percent() {
+        let mut msg = get_valid_init_msg();
+        // Over 100% bad
+        msg.fee_percent = Decimal::percent(101);
+        test_invalid_msg(&msg, "fee_percent");
+    }
+
+    #[test]
+    fn test_invalid_init_msg_oracle_address() {
+        let mut msg = get_valid_init_msg();
+        // Empty string bad
+        msg.oracle_address = String::new();
+        test_invalid_msg(&msg, "oracle_address");
+    }
+
+    #[test]
+    fn test_valid_execute_register_payable() {
+        get_valid_register_payable().to_enum().validate().unwrap();
+    }
+
+    #[test]
+    fn test_invalid_execute_register_payable_payable_type() {
+        let mut msg = get_valid_register_payable();
+        // Empty string bad
+        msg.payable_type = String::new();
+        test_invalid_msg(&msg.to_enum(), "payable_type");
+    }
+
+    #[test]
+    fn test_invalid_execute_register_payable_payable_uuid() {
+        let mut msg = get_valid_register_payable();
+        // Empty string bad
+        msg.payable_uuid = String::new();
+        test_invalid_msg(&msg.to_enum(), "payable_uuid");
+    }
+
+    #[test]
+    fn test_invalid_execute_register_payable_scope_id() {
+        let mut msg = get_valid_register_payable();
+        // Empty string bad
+        msg.scope_id = String::new();
+        test_invalid_msg(&msg.to_enum(), "scope_id");
+    }
+
+    #[test]
+    fn test_invalid_execute_register_payable_payable_denom() {
+        let mut msg = get_valid_register_payable();
+        // Empty string bad
+        msg.payable_denom = String::new();
+        test_invalid_msg(&msg.to_enum(), "payable_denom");
+    }
+
+    #[test]
+    fn test_invalid_execute_register_payable_payable_total() {
+        let mut msg = get_valid_register_payable();
+        // Zero bad
+        msg.payable_total = Uint128::zero();
+        test_invalid_msg(&msg.to_enum(), "payable_total");
+    }
+
+    #[test]
+    fn test_valid_execute_oracle_approval() {
+        OracleApproval { payable_uuid: "d6219342-8f82-11ec-a7cf-1fe3b2eb3267".to_string() }
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_invalid_execute_oracle_approval_payable_uuid() {
+        test_invalid_msg(
+            &OracleApproval { payable_uuid: String::new() },
+            "payable_uuid",
+        );
+    }
+
+    #[test]
+    fn test_valid_execute_make_payment() {
+        MakePayment { payable_uuid: "07933e94-8f83-11ec-a3e4-dbff515bf8c5".to_string() }
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_invalid_execute_make_payment_payable_uuid() {
+        test_invalid_msg(
+            &MakePayment { payable_uuid: String::new() },
+            "payable_uuid",
+        );
+    }
+
+    #[test]
+    fn test_valid_query_query_state() {
+        QueryState {}.validate().unwrap();
+    }
+
+    #[test]
+    fn test_valid_query_query_payable() {
+        QueryPayable { payable_uuid: "3ee3a636-8f83-11ec-8c26-6b8cbb24f4aa".to_string() }
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_invalid_query_query_payable_uuid() {
+        test_invalid_msg(
+            &QueryPayable { payable_uuid: String::new() },
+            "payable_uuid",
+        );
+    }
+
+    fn get_valid_init_msg() -> InitMsg {
+        InitMsg {
+            payable_type: "test".to_string(),
+            contract_name: "test".to_string(),
+            onboarding_cost: "100".to_string(),
+            onboarding_denom: "nhash".to_string(),
+            fee_collection_address: "addr".to_string(),
+            fee_percent: Decimal::percent(50),
+            oracle_address: "addr".to_string(),
+            is_local: Some(true),
+        }
+    }
+
+    struct RegisterPayableBuilder {
+        payable_type: String,
+        payable_uuid: String,
+        scope_id: String,
+        payable_denom: String,
+        payable_total: Uint128,
+    }
+    impl RegisterPayableBuilder {
+        fn to_enum(self) -> ExecuteMsg {
+            ExecuteMsg::RegisterPayable {
+                payable_type: self.payable_type,
+                payable_uuid: self.payable_uuid,
+                scope_id: self.scope_id,
+                payable_denom: self.payable_denom,
+                payable_total: self.payable_total,
+            }
+        }
+    }
+
+    fn get_valid_register_payable() -> RegisterPayableBuilder {
+        RegisterPayableBuilder {
+            payable_type: "test".to_string(),
+            payable_uuid: "86c224de-8f81-11ec-9277-0353b82d7772".to_string(),
+            scope_id: "scope".to_string(),
+            payable_denom: "nhash".to_string(),
+            payable_total: Uint128::new(128),
+        }
+    }
+
+    fn test_invalid_msg(msg: &dyn ValidatedMsg, expected_bad_field: &str) {
+        let err = msg.validate().unwrap_err();
+        match err {
+            ContractError::InvalidFields { fields } => {
+                assert!(
+                    fields.contains(&expected_bad_field.to_string()),
+                    "expected field {} to be contained in errored fields, but found fields {:?}",
+                    expected_bad_field,
+                    fields,
+                )
+            }
+            _ => panic!("unexpected contract error type for invalid fields"),
+        }
     }
 }
