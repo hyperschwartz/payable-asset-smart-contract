@@ -4,12 +4,12 @@ use crate::execute::make_payment::{make_payment, MakePaymentV1};
 use crate::execute::oracle_approval::{oracle_approval, OracleApprovalV1};
 use crate::execute::register_payable::{register_payable, RegisterPayableV1};
 use crate::instantiate::init_contract::init_contract;
+use crate::migrate::migrate_contract::migrate_contract;
 use crate::query::query_payable::query_payable;
 use crate::query::query_state::query_state;
+use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
-use crate::migrate::migrate_contract::migrate_contract;
-use crate::util::traits::ValidatedMsg;
 
 /// Initialize the contract
 #[entry_point]

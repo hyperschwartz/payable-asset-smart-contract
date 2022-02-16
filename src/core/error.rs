@@ -87,7 +87,10 @@ impl ContractError {
     /// Helper to map a Vec<&str> into an InvalidFields enum
     pub fn invalid_fields(fields: Vec<&str>) -> ContractError {
         ContractError::InvalidFields {
-            fields: fields.into_iter().map(|element| element.to_string()).collect(),
+            fields: fields
+                .into_iter()
+                .map(|element| element.to_string())
+                .collect(),
         }
     }
 }

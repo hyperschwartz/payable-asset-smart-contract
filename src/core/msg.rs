@@ -1,7 +1,7 @@
+use crate::core::error::ContractError;
 use cosmwasm_std::{Decimal, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::core::error::ContractError;
 
 use crate::core::state::State;
 use crate::util::traits::ValidatedMsg;
@@ -35,7 +35,7 @@ impl ValidatedMsg for InitMsg {
         if self.contract_name.is_empty() {
             invalid_fields.push("contract_name");
         }
-        if let Err(_) = self.onboarding_cost.parse::<u128>() {
+        if self.onboarding_cost.parse::<u128>().is_err() {
             invalid_fields.push("onboarding_cost");
         }
         if self.onboarding_denom.is_empty() {
@@ -80,7 +80,13 @@ impl ValidatedMsg for ExecuteMsg {
     fn validate(&self) -> Result<(), ContractError> {
         let mut invalid_fields: Vec<&str> = vec![];
         match self {
-            ExecuteMsg::RegisterPayable { payable_type, payable_uuid, scope_id, payable_denom, payable_total } => {
+            ExecuteMsg::RegisterPayable {
+                payable_type,
+                payable_uuid,
+                scope_id,
+                payable_denom,
+                payable_total,
+            } => {
                 if payable_type.is_empty() {
                     invalid_fields.push("payable_type");
                 }
@@ -96,17 +102,17 @@ impl ValidatedMsg for ExecuteMsg {
                 if payable_total.u128() == 0 {
                     invalid_fields.push("payable_total");
                 }
-            },
+            }
             ExecuteMsg::OracleApproval { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            },
+            }
             ExecuteMsg::MakePayment { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            },
+            }
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
@@ -148,8 +154,7 @@ pub type QueryResponse = State;
 /// Migrate the contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub struct MigrateMsg {
-}
+pub struct MigrateMsg {}
 impl ValidatedMsg for MigrateMsg {
     fn validate(&self) -> Result<(), ContractError> {
         Ok(())
@@ -158,12 +163,12 @@ impl ValidatedMsg for MigrateMsg {
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{Decimal, Uint128};
     use crate::core::error::ContractError;
-    use crate::core::msg::{ExecuteMsg, InitMsg};
     use crate::core::msg::ExecuteMsg::{MakePayment, OracleApproval};
     use crate::core::msg::QueryMsg::{QueryPayable, QueryState};
+    use crate::core::msg::{ExecuteMsg, InitMsg};
     use crate::util::traits::ValidatedMsg;
+    use cosmwasm_std::{Decimal, Uint128};
 
     #[test]
     fn test_valid_init_msg() {
@@ -268,30 +273,38 @@ mod tests {
 
     #[test]
     fn test_valid_execute_oracle_approval() {
-        OracleApproval { payable_uuid: "d6219342-8f82-11ec-a7cf-1fe3b2eb3267".to_string() }
-            .validate()
-            .unwrap();
+        OracleApproval {
+            payable_uuid: "d6219342-8f82-11ec-a7cf-1fe3b2eb3267".to_string(),
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]
     fn test_invalid_execute_oracle_approval_payable_uuid() {
         test_invalid_msg(
-            &OracleApproval { payable_uuid: String::new() },
+            &OracleApproval {
+                payable_uuid: String::new(),
+            },
             "payable_uuid",
         );
     }
 
     #[test]
     fn test_valid_execute_make_payment() {
-        MakePayment { payable_uuid: "07933e94-8f83-11ec-a3e4-dbff515bf8c5".to_string() }
-            .validate()
-            .unwrap();
+        MakePayment {
+            payable_uuid: "07933e94-8f83-11ec-a3e4-dbff515bf8c5".to_string(),
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]
     fn test_invalid_execute_make_payment_payable_uuid() {
         test_invalid_msg(
-            &MakePayment { payable_uuid: String::new() },
+            &MakePayment {
+                payable_uuid: String::new(),
+            },
             "payable_uuid",
         );
     }
@@ -303,15 +316,19 @@ mod tests {
 
     #[test]
     fn test_valid_query_query_payable() {
-        QueryPayable { payable_uuid: "3ee3a636-8f83-11ec-8c26-6b8cbb24f4aa".to_string() }
-            .validate()
-            .unwrap();
+        QueryPayable {
+            payable_uuid: "3ee3a636-8f83-11ec-8c26-6b8cbb24f4aa".to_string(),
+        }
+        .validate()
+        .unwrap();
     }
 
     #[test]
     fn test_invalid_query_query_payable_uuid() {
         test_invalid_msg(
-            &QueryPayable { payable_uuid: String::new() },
+            &QueryPayable {
+                payable_uuid: String::new(),
+            },
             "payable_uuid",
         );
     }

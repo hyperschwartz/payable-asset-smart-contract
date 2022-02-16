@@ -1,9 +1,9 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
 use crate::core::state::{config, State};
-use cosmwasm_std::{Decimal, DepsMut, Env, MessageInfo, Response, Uint128};
-use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
 use crate::migrate::version_info::migrate_version_info;
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
+use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
 
 pub fn init_contract(
     deps: DepsMut<ProvenanceQuery>,
@@ -50,12 +50,12 @@ pub fn init_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::migrate::version_info::{get_version_info, CONTRACT_NAME, CONTRACT_VERSION};
     use crate::testutil::test_utilities::{test_instantiate, InstArgs, DEFAULT_ONBOARDING_DENOM};
     use cosmwasm_std::testing::mock_info;
-    use cosmwasm_std::{coin, CosmosMsg, StdError};
+    use cosmwasm_std::{coin, CosmosMsg, Decimal, StdError};
     use provwasm_mocks::mock_dependencies;
     use provwasm_std::{NameMsgParams, ProvenanceMsgParams};
-    use crate::migrate::version_info::{CONTRACT_NAME, CONTRACT_VERSION, get_version_info};
 
     #[test]
     fn test_valid_init() {
@@ -122,13 +122,11 @@ mod tests {
         );
         let version_info = get_version_info(deps.as_ref().storage).unwrap();
         assert_eq!(
-            CONTRACT_NAME,
-            version_info.contract,
+            CONTRACT_NAME, version_info.contract,
             "the contract name should be properly stored after a successful instantiation",
         );
         assert_eq!(
-            CONTRACT_VERSION,
-            version_info.version,
+            CONTRACT_VERSION, version_info.version,
             "the contract version should be properly stored after a succesful instantiation",
         );
     }
@@ -175,7 +173,7 @@ mod tests {
                     fields.contains(&"fee_percent".to_string()),
                     "the fee percent field should be detected as invalid when too high a fee is provided",
                 );
-            },
+            }
             _ => panic!("unexpected error encountered when too high fee percent provided"),
         };
     }

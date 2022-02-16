@@ -1,11 +1,14 @@
+use crate::core::error::ContractError;
+use crate::core::msg::MigrateMsg;
+use crate::migrate::version_info::{get_version_info, CONTRACT_NAME, CONTRACT_VERSION};
 use cosmwasm_std::{DepsMut, Response, Storage};
 use provwasm_std::ProvenanceQuery;
 use semver::Version;
-use crate::core::error::ContractError;
-use crate::core::msg::MigrateMsg;
-use crate::migrate::version_info::{CONTRACT_NAME, CONTRACT_VERSION, get_version_info};
 
-pub fn migrate_contract(deps: DepsMut<ProvenanceQuery>, msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn migrate_contract(
+    deps: DepsMut<ProvenanceQuery>,
+    _msg: MigrateMsg,
+) -> Result<Response, ContractError> {
     check_valid_migration_versioning(deps.storage)?;
     Ok(Response::new())
 }
@@ -19,7 +22,7 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
             current_contract: stored_version_info.contract,
             migration_contract: CONTRACT_NAME.to_string(),
         }
-            .to_result();
+        .to_result();
     }
     let contract_version = CONTRACT_VERSION.parse::<Version>()?;
     // If the stored version in the contract is greater than the derived version from the package,
@@ -28,7 +31,8 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
         return ContractError::InvalidContractVersion {
             current_version: stored_version_info.version,
             migration_version: CONTRACT_VERSION.to_string(),
-        }.to_result();
+        }
+        .to_result();
     }
     Ok(())
 }

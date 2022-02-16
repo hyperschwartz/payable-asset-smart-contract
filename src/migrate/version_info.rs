@@ -1,9 +1,9 @@
+use crate::core::error::ContractError;
 use cosmwasm_std::Storage;
 use cw_storage_plus::Item;
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use crate::core::error::ContractError;
 
 // When cargo is building this project, it automatically adds these env vars for the code to infer.
 // See Cargo.toml's name and version fields in the [package] section for the values.
@@ -55,8 +55,11 @@ pub fn migrate_version_info(storage: &mut dyn Storage) -> Result<VersionInfoV1, 
 
 #[cfg(test)]
 mod tests {
+    use crate::migrate::version_info::{
+        get_version_info, migrate_version_info, set_version_info, VersionInfoV1, CONTRACT_NAME,
+        CONTRACT_VERSION,
+    };
     use cosmwasm_std::testing::mock_dependencies;
-    use crate::migrate::version_info::{CONTRACT_NAME, CONTRACT_VERSION, get_version_info, migrate_version_info, set_version_info, VersionInfoV1};
 
     #[test]
     fn test_set_and_get_version_info() {
