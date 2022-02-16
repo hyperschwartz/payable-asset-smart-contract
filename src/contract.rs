@@ -8,6 +8,8 @@ use crate::query::query_payable::query_payable;
 use crate::query::query_state::query_state;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
+use crate::migrate::migrate_contract::migrate_contract;
+use crate::util::traits::ValidatedMsg;
 
 /// Initialize the contract
 #[entry_point]
@@ -17,6 +19,8 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InitMsg,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
+    // Ensure that the message is valid before processing the request
+    msg.validate()?;
     init_contract(deps, env, info, msg)
 }
 
@@ -27,6 +31,8 @@ pub fn query(
     _env: Env,
     msg: QueryMsg,
 ) -> Result<Binary, ContractError> {
+    // Ensure that the message is valid before processing the request
+    msg.validate()?;
     match msg {
         QueryMsg::QueryState {} => query_state(deps),
         QueryMsg::QueryPayable { payable_uuid } => query_payable(deps, payable_uuid),
@@ -41,6 +47,8 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
+    // Ensure that the message is valid before processing the request
+    msg.validate()?;
     match msg {
         ExecuteMsg::RegisterPayable {
             payable_type,
@@ -71,9 +79,11 @@ pub fn execute(
 /// Called when migrating a contract instance to a new code ID.
 #[entry_point]
 pub fn migrate(
-    _deps: DepsMut<ProvenanceQuery>,
+    deps: DepsMut<ProvenanceQuery>,
     _env: Env,
-    _msg: MigrateMsg,
+    msg: MigrateMsg,
 ) -> Result<Response, ContractError> {
-    Ok(Response::default())
+    // Ensure that the message is valid before processing the request
+    msg.validate()?;
+    migrate_contract(deps, msg)
 }

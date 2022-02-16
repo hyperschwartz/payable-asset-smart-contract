@@ -1,7 +1,6 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
 use crate::core::state::{config, State};
-use crate::util::conversions::to_percent;
 use cosmwasm_std::{Decimal, DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
 use crate::migrate::version_info::migrate_version_info;
@@ -15,13 +14,6 @@ pub fn init_contract(
     // Ensure no funds were sent with the message
     if !info.funds.is_empty() {
         return ContractError::std_err("purchase funds are not allowed to be sent during init");
-    }
-
-    if msg.fee_percent > Decimal::one() {
-        return ContractError::std_err(format!(
-            "fee [{}%] must be less than 100%",
-            to_percent(msg.fee_percent)
-        ));
     }
 
     // Create and save contract config state. The name is used for setting attributes on user accounts
@@ -178,14 +170,11 @@ mod tests {
         )
         .unwrap_err();
         match err {
-            ContractError::Std(std_err) => match std_err {
-                StdError::GenericErr { msg, .. } => {
-                    assert_eq!(
-                        "fee [101%] must be less than 100%", msg,
-                        "unexpected error message during bad fee percent provided",
-                    )
-                }
-                _ => panic!("unexpected stderr encountered during bad fee percent"),
+            ContractError::InvalidFields { fields } => {
+                assert!(
+                    fields.contains(&"fee_percent".to_string()),
+                    "the fee percent field should be detected as invalid when too high a fee is provided",
+                );
             },
             _ => panic!("unexpected error encountered when too high fee percent provided"),
         };
