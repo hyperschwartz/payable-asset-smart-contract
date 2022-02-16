@@ -56,3 +56,17 @@ pub enum ContractError {
         amount_provided: u128,
     },
 }
+impl ContractError {
+    /// Allows ContractError instances to be generically returned as a Response in a fluent manner
+    /// instead of wrapping in an Err() call, improving readability.
+    /// Ex: return ContractError::NameNotFound.to_result();
+    /// vs
+    ///     return Err(ContractError::NameNotFound);
+    pub fn to_result<T>(self) -> Result<T, ContractError> {
+        Err(self)
+    }
+    /// A simple abstraction to wrap an error response just by passing the message
+    pub fn std_err<T>(msg: impl Into<String>) -> Result<T, ContractError> {
+        Err(ContractError::Std(StdError::generic_err(msg)))
+    }
+}

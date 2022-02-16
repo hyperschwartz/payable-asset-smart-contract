@@ -1,4 +1,4 @@
-use cosmwasm_std::{Decimal, Uint128};
+use cosmwasm_std::Uint128;
 
 /// Global Variables
 pub const ONE_HUNDRED: Uint128 = Uint128::new(100);
@@ -27,8 +27,3 @@ pub const PAYEE_KEY: &str = "payable_payee"; // Value = Bech32 address of th ent
 /// Shared output attributes
 pub const PAYABLE_UUID_KEY: &str = "payable_uuid"; // Value = Payable UUID (String)
 pub const PAYABLE_TYPE_KEY: &str = "payable_type"; // Value = Payable Type (String)
-
-/// Global Functions
-pub fn to_percent(dec: Decimal) -> String {
-    (dec * ONE_HUNDRED).to_string()
-}
