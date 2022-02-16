@@ -17,7 +17,7 @@ mod tests {
     use crate::contract::{execute, query};
     use crate::core::msg::QueryMsg;
     use crate::core::state::PayableMeta;
-    use crate::test_utilities::testutils::{
+    use crate::testutil::test_utilities::{
         default_register_payable, get_duped_scope, test_instantiate, InstArgs, DEFAULT_INFO_NAME,
         DEFAULT_ONBOARDING_DENOM, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL,
         DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,

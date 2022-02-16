@@ -12,7 +12,7 @@ pub fn query_state(deps: Deps<ProvenanceQuery>) -> Result<Binary, ContractError>
 mod tests {
     use crate::contract::query;
     use crate::core::msg::{QueryMsg, QueryResponse};
-    use crate::test_utilities::testutils::{
+    use crate::testutil::test_utilities::{
         test_instantiate, InstArgs, DEFAULT_CONTRACT_NAME, DEFAULT_FEE_COLLECTION_ADDRESS,
         DEFAULT_FEE_PERCENT, DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS,
     };

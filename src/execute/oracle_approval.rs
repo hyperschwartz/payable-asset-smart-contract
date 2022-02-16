@@ -71,7 +71,7 @@ mod tests {
     use crate::core::error::ContractError;
     use crate::core::msg::{ExecuteMsg, QueryMsg};
     use crate::core::state::PayableMeta;
-    use crate::test_utilities::testutils::{
+    use crate::testutil::test_utilities::{
         default_register_payable, get_duped_scope, test_instantiate, InstArgs,
         DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
         DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
