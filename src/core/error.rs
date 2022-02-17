@@ -21,6 +21,18 @@ pub enum ContractError {
         amount_provided: u128,
     },
 
+    #[error("Current contract name [{current_contract}] does not match provided migration name [{migration_contract}]")]
+    InvalidContractName {
+        current_contract: String,
+        migration_contract: String,
+    },
+
+    #[error("Current contract version [{current_version}] is higher than provided migration version [{migration_version}]")]
+    InvalidContractVersion {
+        current_version: String,
+        migration_version: String,
+    },
+
     // Add any other custom errors you like here.
     // Look at https://docs.rs/thiserror/1.0.21/thiserror/ for details.
     #[error("Invalid fields: {fields:?}")]
@@ -55,4 +67,36 @@ pub enum ContractError {
         total_owed: u128,
         amount_provided: u128,
     },
+
+    #[error("Semver parsing error: {0}")]
+    SemVer(String),
+}
+impl ContractError {
+    /// Allows ContractError instances to be generically returned as a Response in a fluent manner
+    /// instead of wrapping in an Err() call, improving readability.
+    /// Ex: return ContractError::NameNotFound.to_result();
+    /// vs
+    ///     return Err(ContractError::NameNotFound);
+    pub fn to_result<T>(self) -> Result<T, ContractError> {
+        Err(self)
+    }
+    /// A simple abstraction to wrap an error response just by passing the message
+    pub fn std_err<T>(msg: impl Into<String>) -> Result<T, ContractError> {
+        Err(ContractError::Std(StdError::generic_err(msg)))
+    }
+    /// Helper to map a Vec<&str> into an InvalidFields enum
+    pub fn invalid_fields(fields: Vec<&str>) -> ContractError {
+        ContractError::InvalidFields {
+            fields: fields
+                .into_iter()
+                .map(|element| element.to_string())
+                .collect(),
+        }
+    }
+}
+impl From<semver::Error> for ContractError {
+    /// Enables SemVer issues to cast convert implicitly to contract error
+    fn from(err: semver::Error) -> Self {
+        Self::SemVer(err.to_string())
+    }
 }
