@@ -46,13 +46,6 @@ impl Default for InstArgs {
         }
     }
 }
-impl InstArgs {
-    fn default() -> InstArgs {
-        InstArgs {
-            ..Default::default()
-        }
-    }
-}
 
 pub fn test_instantiate(
     deps: DepsMut<ProvenanceQuery>,
