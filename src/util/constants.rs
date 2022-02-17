@@ -1,4 +1,4 @@
-use cosmwasm_std::{Decimal, Uint128};
+use cosmwasm_std::Uint128;
 
 /// Global Variables
 pub const ONE_HUNDRED: Uint128 = Uint128::new(100);
@@ -24,11 +24,10 @@ pub const TOTAL_REMAINING_KEY: &str = "payable_total_remaining"; // Value = Amou
 pub const PAYER_KEY: &str = "payable_payer"; // Value = Bech32 address of the entity that made the payment (String)
 pub const PAYEE_KEY: &str = "payable_payee"; // Value = Bech32 address of th entity that received the payment (String)
 
+/// Migration output attributes
+pub const MIGRATION_CONTRACT_NAME: &str = "payable_migration_contract_name"; // Value = Name of the contract being migrated to, which should never change (String)
+pub const MIGRATION_CONTRACT_VERSION: &str = "payable_migration_contract_version"; // Value = New contract version that has been migrated to (String)
+
 /// Shared output attributes
 pub const PAYABLE_UUID_KEY: &str = "payable_uuid"; // Value = Payable UUID (String)
 pub const PAYABLE_TYPE_KEY: &str = "payable_type"; // Value = Payable Type (String)
-
-/// Global Functions
-pub fn to_percent(dec: Decimal) -> String {
-    (dec * ONE_HUNDRED).to_string()
-}
