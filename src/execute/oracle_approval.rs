@@ -72,8 +72,8 @@ mod tests {
     use crate::core::msg::{ExecuteMsg, QueryMsg};
     use crate::core::state::PayableMeta;
     use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, test_instantiate, InstArgs,
-        DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
+        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
+        InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
         DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
     };
     use crate::util::constants::{ORACLE_APPROVED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY};
@@ -107,6 +107,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
+            3,
+            approval_response.attributes.len(),
+            "expected all attributes to be added"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&approval_response, ORACLE_APPROVED_KEY),
+            "expected the oracle approved key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            single_attribute_for_key(&approval_response, PAYABLE_TYPE_KEY),
+            "expected the payable type key to be added as an attribute",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&approval_response, PAYABLE_UUID_KEY),
+            "expected the payable uuid key to be added as an attribute",
+        );
+        assert_eq!(
             1,
             approval_response.messages.len(),
             "expected a message for the oracle fee withdrawal"
@@ -133,44 +153,6 @@ mod tests {
             },
             _ => panic!("unexpected message occurred during oracle approval"),
         });
-        assert_eq!(
-            3,
-            approval_response.attributes.len(),
-            "expected all attributes to be added"
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == ORACLE_APPROVED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the oracle approved key to be added as an attribute",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TYPE,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable type key to be added as an attribute",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable uuid key to be added as an attribute",
-        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -231,35 +213,17 @@ mod tests {
         );
         assert_eq!(
             DEFAULT_PAYABLE_UUID,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == ORACLE_APPROVED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
+            single_attribute_for_key(&approval_response, ORACLE_APPROVED_KEY),
             "expected the oracle approved key to be added as an attribute",
         );
         assert_eq!(
             DEFAULT_PAYABLE_TYPE,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
+            single_attribute_for_key(&approval_response, PAYABLE_TYPE_KEY),
             "expected the payable type key to be added as an attribute",
         );
         assert_eq!(
             DEFAULT_PAYABLE_UUID,
-            approval_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
+            single_attribute_for_key(&approval_response, PAYABLE_UUID_KEY),
             "expected the payable uuid key to be added as an attribute",
         );
         let payable_binary = query(

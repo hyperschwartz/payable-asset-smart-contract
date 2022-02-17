@@ -97,3 +97,13 @@ pub fn get_duped_scope(scope_id: &str, owner_address: &str) -> Scope {
         value_owner_address: Addr::unchecked(owner_address),
     }
 }
+
+pub fn single_attribute_for_key<'a, T>(response: &'a Response<T>, key: &'a str) -> &'a str {
+    response
+        .attributes
+        .iter()
+        .find(|attr| attr.key.as_str() == key)
+        .unwrap()
+        .value
+        .as_str()
+}

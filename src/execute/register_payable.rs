@@ -193,8 +193,8 @@ mod tests {
     use crate::core::error::ContractError::Std;
     use crate::core::msg::ExecuteMsg;
     use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, test_instantiate, InstArgs,
-        DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
+        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
+        InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
         DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID,
         DEFAULT_SCOPE_ID,
     };
@@ -224,6 +224,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
+            7,
+            response.attributes.len(),
+            "expected all registration attributes to be recorded"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&response, PAYABLE_REGISTERED_KEY),
+            "the PAYABLE_REGISTERED_KEY should be present and equal to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            single_attribute_for_key(&response, PAYABLE_TYPE_KEY),
+            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&response, PAYABLE_UUID_KEY),
+            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_SCOPE_ID,
+            single_attribute_for_key(&response, SCOPE_ID_KEY),
+            "the SCOPE_ID_KEY should equate to the input scope id",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            single_attribute_for_key(&response, TOTAL_OWED_KEY),
+            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_DENOM,
+            single_attribute_for_key(&response, REGISTERED_DENOM_KEY),
+            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
+        );
+        assert_eq!(
+            "25/nhash",
+            single_attribute_for_key(&response, ORACLE_FUNDS_KEPT),
+            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
+        );
+        assert_eq!(
             1,
             response.messages.len(),
             "one message expected during registration: a fee charge",
@@ -238,82 +278,6 @@ mod tests {
             },
             _ => panic!("unexpected response message type"),
         });
-        assert_eq!(
-            7,
-            response.attributes.len(),
-            "expected all registration attributes to be recorded"
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_REGISTERED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_REGISTERED_KEY should be present and equal to the payable uuid",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TYPE,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
-        );
-        assert_eq!(
-            DEFAULT_SCOPE_ID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == SCOPE_ID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the SCOPE_ID_KEY should equate to the input scope id",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TOTAL.to_string(),
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == TOTAL_OWED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_DENOM,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == REGISTERED_DENOM_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
-        );
-        assert_eq!(
-            "25/nhash",
-            response.attributes.iter().find(|attr| attr.key.as_str() == ORACLE_FUNDS_KEPT).unwrap().value.as_str(),
-            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
-        );
     }
 
     #[test]
@@ -332,6 +296,51 @@ mod tests {
             default_register_payable(),
         )
         .unwrap();
+        assert_eq!(
+            8,
+            response.attributes.len(),
+            "expected all registration attributes to be recorded"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&response, PAYABLE_REGISTERED_KEY),
+            "the PAYABLE_REGISTERED_KEY should be present and equal to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            single_attribute_for_key(&response, PAYABLE_TYPE_KEY),
+            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&response, PAYABLE_UUID_KEY),
+            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_SCOPE_ID,
+            single_attribute_for_key(&response, SCOPE_ID_KEY),
+            "the SCOPE_ID_KEY should equate to the input scope id",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            single_attribute_for_key(&response, TOTAL_OWED_KEY),
+            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_DENOM,
+            single_attribute_for_key(&response, REGISTERED_DENOM_KEY),
+            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
+        );
+        assert_eq!(
+            "25/nhash",
+            single_attribute_for_key(&response, ORACLE_FUNDS_KEPT),
+            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
+        );
+        assert_eq!(
+            "50/nhash",
+            single_attribute_for_key(&response, REFUND_AMOUNT_KEY),
+            "the refund amount should equal the amount provided over the onboarding cost (150 - 100)",
+        );
         assert_eq!(
             2,
             response.messages.len(),
@@ -355,87 +364,6 @@ mod tests {
             },
             _ => panic!("unexpected response message type"),
         });
-        assert_eq!(
-            8,
-            response.attributes.len(),
-            "expected all registration attributes to be recorded"
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_REGISTERED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_REGISTERED_KEY should be present and equal to the payable uuid",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TYPE,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_TYPE_KEY should contain the contract's payable type",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the PAYABLE_UUID_KEY value should equate to the payable uuid",
-        );
-        assert_eq!(
-            DEFAULT_SCOPE_ID,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == SCOPE_ID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the SCOPE_ID_KEY should equate to the input scope id",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TOTAL.to_string(),
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == TOTAL_OWED_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the TOTAL_OWED_KEY value should equate to the default total owed amount",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_DENOM,
-            response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == REGISTERED_DENOM_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "the REGISTERED_DENOM_KEY value should equate to the denomination used for the payable",
-        );
-        assert_eq!(
-            "25/nhash",
-            response.attributes.iter().find(|attr| attr.key.as_str() == ORACLE_FUNDS_KEPT).unwrap().value.as_str(),
-            "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
-        );
-        assert_eq!(
-            "50/nhash",
-            response.attributes.iter().find(|attr| attr.key.as_str() == REFUND_AMOUNT_KEY).unwrap().value.as_str(),
-            "the refund amount should equal the amount provided over the onboarding cost (150 - 100)",
-        );
     }
 
     #[test]

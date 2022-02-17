@@ -101,9 +101,10 @@ mod tests {
     use crate::core::msg::{ExecuteMsg, QueryMsg};
     use crate::core::state::PayableMeta;
     use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, test_instantiate, InstArgs, DEFAULT_INFO_NAME,
-        DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM,
-        DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
+        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
+        InstArgs, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS,
+        DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID,
+        DEFAULT_SCOPE_ID,
     };
     use crate::util::constants::{
         PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY,
@@ -157,6 +158,46 @@ mod tests {
             payment_response.messages.len(),
             "one message should be added: the payment to the owner of the payable"
         );
+        assert_eq!(
+            7,
+            payment_response.attributes.len(),
+            "expected all attributes to be added to the response"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&payment_response, PAYMENT_MADE_KEY),
+            "expected the payment made key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            single_attribute_for_key(&payment_response, PAYABLE_TYPE_KEY),
+            "expected the payable type key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&payment_response, PAYABLE_UUID_KEY),
+            "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TOTAL.to_string(),
+            single_attribute_for_key(&payment_response, PAYMENT_AMOUNT_KEY),
+            "expected the payment amount key to be added to the response and equate to the total owed",
+        );
+        assert_eq!(
+            "0",
+            single_attribute_for_key(&payment_response, TOTAL_REMAINING_KEY),
+            "expected the total remaining key to be added to the response and equate to zero because the payable was paid off",
+        );
+        assert_eq!(
+            "payer-guy",
+            single_attribute_for_key(&payment_response, PAYER_KEY),
+            "expected the payer to be the value input as the sender",
+        );
+        assert_eq!(
+            DEFAULT_INFO_NAME,
+            single_attribute_for_key(&payment_response, PAYEE_KEY),
+            "expected the payee to the be the default info name, as that was used to create the scope",
+        );
         payment_response
             .messages
             .into_iter()
@@ -185,69 +226,6 @@ mod tests {
                 }
                 _ => panic!("unexpected message sent during payment"),
             });
-        assert_eq!(
-            7,
-            payment_response.attributes.len(),
-            "expected all attributes to be added to the response"
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYMENT_MADE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payment made key to be added to the response",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TYPE,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable type key to be added to the response",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable uuid key to be added to the response",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TOTAL.to_string(),
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYMENT_AMOUNT_KEY).unwrap().value,
-            "expected the payment amount key to be added to the response and equate to the total owed",
-        );
-        assert_eq!(
-            "0",
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
-            "expected the total remaining key to be added to the response and equate to zero because the payable was paid off",
-        );
-        assert_eq!(
-            "payer-guy",
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYER_KEY)
-                .unwrap()
-                .value,
-            "expected the payer to be the value input as the sender",
-        );
-        assert_eq!(
-            DEFAULT_INFO_NAME,
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
-            "expected the payee to the be the default info name, as that was used to create the scope",
-        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -310,6 +288,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
+            7,
+            payment_response.attributes.len(),
+            "expected all attributes to be added to the response"
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&payment_response, PAYMENT_MADE_KEY),
+            "expected the payment made key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_TYPE,
+            single_attribute_for_key(&payment_response, PAYABLE_TYPE_KEY),
+            "expected the payable type key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_PAYABLE_UUID,
+            single_attribute_for_key(&payment_response, PAYABLE_UUID_KEY),
+            "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            (DEFAULT_PAYABLE_TOTAL - 100).to_string(),
+            single_attribute_for_key(&payment_response, PAYMENT_AMOUNT_KEY),
+            "expected the payment amount key to be added to the response and equate to the total owed - 100",
+        );
+        assert_eq!(
+            "100",
+            single_attribute_for_key(&payment_response, TOTAL_REMAINING_KEY),
+            "expected the total remaining key to be added to the response and equate to 100 because that was the amount unpaid",
+        );
+        assert_eq!(
+            "payer-guy",
+            single_attribute_for_key(&payment_response, PAYER_KEY),
+            "expected the payer to be the value input as the sender",
+        );
+        assert_eq!(
+            DEFAULT_INFO_NAME,
+            single_attribute_for_key(&payment_response, PAYEE_KEY),
+            "expected the payee to the be the default info name, as that was used to create the scope",
+        );
+        assert_eq!(
             1,
             payment_response.messages.len(),
             "one message should be added: the payment to the owner of the payable"
@@ -342,69 +360,6 @@ mod tests {
                 }
                 _ => panic!("unexpected message sent during payment"),
             });
-        assert_eq!(
-            7,
-            payment_response.attributes.len(),
-            "expected all attributes to be added to the response"
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYMENT_MADE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payment made key to be added to the response",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_TYPE,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_TYPE_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable type key to be added to the response",
-        );
-        assert_eq!(
-            DEFAULT_PAYABLE_UUID,
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYABLE_UUID_KEY)
-                .unwrap()
-                .value
-                .as_str(),
-            "expected the payable uuid key to be added to the response",
-        );
-        assert_eq!(
-            (DEFAULT_PAYABLE_TOTAL - 100).to_string(),
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYMENT_AMOUNT_KEY).unwrap().value,
-            "expected the payment amount key to be added to the response and equate to the total owed - 100",
-        );
-        assert_eq!(
-            "100",
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == TOTAL_REMAINING_KEY).unwrap().value,
-            "expected the total remaining key to be added to the response and equate to 100 because that was the amount unpaid",
-        );
-        assert_eq!(
-            "payer-guy",
-            payment_response
-                .attributes
-                .iter()
-                .find(|attr| attr.key.as_str() == PAYER_KEY)
-                .unwrap()
-                .value,
-            "expected the payer to be the value input as the sender",
-        );
-        assert_eq!(
-            DEFAULT_INFO_NAME,
-            payment_response.attributes.iter().find(|attr| attr.key.as_str() == PAYEE_KEY).unwrap().value,
-            "expected the payee to the be the default info name, as that was used to create the scope",
-        );
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
