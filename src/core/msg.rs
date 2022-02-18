@@ -519,6 +519,7 @@ mod tests {
         payable_type: String,
         payable_uuid: String,
         scope_id: String,
+        oracle_address: String,
         payable_denom: String,
         payable_total: Uint128,
     }
@@ -528,6 +529,7 @@ mod tests {
                 payable_type: self.payable_type,
                 payable_uuid: self.payable_uuid,
                 scope_id: self.scope_id,
+                oracle_address: self.oracle_address,
                 payable_denom: self.payable_denom,
                 payable_total: self.payable_total,
             }
@@ -539,6 +541,7 @@ mod tests {
             payable_type: "test".to_string(),
             payable_uuid: "86c224de-8f81-11ec-9277-0353b82d7772".to_string(),
             scope_id: "scope".to_string(),
+            oracle_address: "oracle-addr".to_string(),
             payable_denom: "nhash".to_string(),
             payable_total: Uint128::new(128),
         }

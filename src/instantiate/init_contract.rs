@@ -1,6 +1,6 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
-use crate::core::state::{config, config_v2, State, StateV2};
+use crate::core::state::{config, config_v2, StateV2};
 use crate::migrate::version_info::migrate_version_info;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
@@ -15,7 +15,6 @@ pub fn init_contract(
     if !info.funds.is_empty() {
         return ContractError::std_err("purchase funds are not allowed to be sent during init");
     }
-
     // Create and save contract config state. The name is used for setting attributes on user accounts
     config_v2(deps.storage).save(&StateV2 {
         contract_name: msg.contract_name.clone(),
@@ -28,17 +27,14 @@ pub fn init_contract(
         // Always default to non-local if the value is not provided
         is_local: msg.is_local.unwrap_or(false),
     })?;
-
     // Create a message that will bind a restricted name to the contract address.
     let bind_name_msg = bind_name(
         &msg.contract_name,
         env.contract.address,
         NameBinding::Restricted,
     )?;
-
     // Set the version info to the default contract values on instantiation
     migrate_version_info(deps.storage)?;
-
     // Dispatch messages and emit event attributes
     Ok(Response::new()
         .add_message(bind_name_msg)

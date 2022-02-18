@@ -51,7 +51,7 @@ pub fn oracle_approval(
     // Only create a payment to the oracle if there were funds stored in the first place
     if oracle_withdraw_amount.u128() > 0 {
         messages.push(CosmosMsg::Bank(BankMsg::Send {
-            to_address: scope_attribute.oracle_address.into(),
+            to_address: scope_attribute.oracle_address.clone().into(),
             amount: vec![coin(oracle_withdraw_amount.u128(), state.onboarding_denom)],
         }));
     }
@@ -64,7 +64,7 @@ pub fn oracle_approval(
         .add_attribute(ORACLE_APPROVED_KEY, &scope_attribute.payable_uuid)
         .add_attribute(PAYABLE_TYPE_KEY, &scope_attribute.payable_type)
         .add_attribute(PAYABLE_UUID_KEY, &scope_attribute.payable_uuid)
-        .add_attribute(ORACLE_ADDRESS_KEY, &scope_attribute.oracle_address.as_str()))
+        .add_attribute(ORACLE_ADDRESS_KEY, scope_attribute.oracle_address.as_str()))
 }
 
 #[cfg(test)]
@@ -158,7 +158,7 @@ mod tests {
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
@@ -231,7 +231,7 @@ mod tests {
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )

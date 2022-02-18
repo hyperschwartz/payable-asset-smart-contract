@@ -47,6 +47,7 @@ pub fn config_read(storage: &dyn Storage) -> ReadonlySingleton<State> {
 }
 
 /// Stores all relevant data about the contract. Modifiable only partially by migrations
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct StateV2 {
     // Name of the contract that is tagged on various things
     pub contract_name: String,
@@ -112,6 +113,7 @@ pub struct PayableScopeAttribute {
 
 /// This struct is used to link a payable uuid to a scope id to allow querying for PayableScopeAttribute
 /// data when a scope id is not available to the caller
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PayableMetaV2 {
     // The unique identifier for the payable. Used for all requests that target a payable and the key to the Bucket
     pub payable_uuid: String,

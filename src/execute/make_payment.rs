@@ -19,7 +19,7 @@ pub fn make_payment(
         Ok(attr) => {
             if !attr.oracle_approved {
                 return Err(ContractError::NotReadyForPayment {
-                    payable_uuid: meta.payable_uuid,
+                    payable_uuid: attr.payable_uuid,
                     not_ready_reason: "Payable missing oracle approval".into(),
                 });
             }
@@ -86,11 +86,11 @@ pub fn make_payment(
         .add_message(payment_message)
         .add_messages(upsert_attribute_msgs.to_vec())
         .add_attribute(PAYMENT_MADE_KEY, &scope_attribute.payable_uuid)
-        .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
+        .add_attribute(PAYABLE_TYPE_KEY, &scope_attribute.payable_type)
         .add_attribute(PAYABLE_UUID_KEY, &scope_attribute.payable_uuid)
         .add_attribute(ORACLE_ADDRESS_KEY, &scope_attribute.oracle_address)
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
-        .add_attribute(TOTAL_REMAINING_KEY, &scope_attribute.payable_remaining_owed)
+        .add_attribute(TOTAL_REMAINING_KEY, scope_attribute.payable_remaining_owed)
         .add_attribute(PAYER_KEY, &info.sender.to_string())
         .add_attribute(PAYEE_KEY, payee.as_str()))
 }
@@ -230,7 +230,7 @@ mod tests {
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
@@ -364,7 +364,7 @@ mod tests {
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
@@ -393,7 +393,7 @@ mod tests {
         let subsequent_payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )

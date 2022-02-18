@@ -67,6 +67,7 @@ pub fn default_register_payable() -> ExecuteMsg {
         payable_type: DEFAULT_PAYABLE_TYPE.into(),
         payable_uuid: DEFAULT_PAYABLE_UUID.into(),
         scope_id: DEFAULT_SCOPE_ID.into(),
+        oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
         payable_denom: DEFAULT_PAYABLE_DENOM.into(),
         payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
     }

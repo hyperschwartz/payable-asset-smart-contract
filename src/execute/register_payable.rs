@@ -1,5 +1,5 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, config_read_v2, payable_meta_storage, PayableMeta, PayableMetaV2, PayableScopeAttribute, State};
+use crate::core::state::{config_read_v2, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2};
 use crate::util::constants::{ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY};
 use crate::util::provenance_utils::{get_add_initial_attribute_to_scope_msg, get_scope_by_id};
 use cosmwasm_std::{coin, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128, Addr};
@@ -25,8 +25,8 @@ pub fn register_payable(
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
+    let state = config_read_v2(deps.storage).load()?;
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
-    // TODO: Tag the payable uuid on the scope as an attribute
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
         messages.push(fee_message);
         attributes.push(Attribute::new(
@@ -47,7 +47,7 @@ pub fn register_payable(
             ),
         ));
     }
-    let state = config_read_v2(deps.storage).load()?;
+
     // If the sender's address is not listed as an owner address on the target scope for the payable,
     // then they are not authorized to register this payable.
     // Skip this step locally - creating a scope is an unnecessary piece of testing this
@@ -78,17 +78,25 @@ pub fn register_payable(
         &register.payable_denom,
     ));
     attributes.push(Attribute::new(SCOPE_ID_KEY, &register.scope_id));
+    // Tag the scope with an attribute that contains all information about its current payable
+    // status
     let scope_attribute = PayableScopeAttribute {
         payable_type: register.payable_type,
         payable_uuid: register.payable_uuid,
         scope_id: register.scope_id,
         oracle_address: Addr::unchecked(register.oracle_address),
-        payable_denom: String,
+        payable_denom: register.payable_denom,
         payable_total_owed: register.payable_total,
         payable_remaining_owed: register.payable_total,
         oracle_approved: false,
     };
     messages.push(get_add_initial_attribute_to_scope_msg(&deps.as_ref(), &scope_attribute, &state.contract_name)?);
+    // Store a link between the payable's uuid and the scope id in local storage for queries
+    let payable_meta = PayableMetaV2 {
+        payable_uuid: scope_attribute.payable_uuid,
+        scope_id: scope_attribute.scope_id,
+    };
+    payable_meta_storage_v2(deps.storage).save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))
@@ -103,7 +111,7 @@ struct FeeChargeResponse {
 
 fn validate_fee_params_get_messages(
     info: &MessageInfo,
-    state: &State,
+    state: &StateV2,
 ) -> Result<FeeChargeResponse, ContractError> {
     let invalid_funds = info
         .funds
@@ -183,12 +191,7 @@ mod tests {
     use crate::core::error::ContractError;
     use crate::core::error::ContractError::Std;
     use crate::core::msg::ExecuteMsg;
-    use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
-        InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
-        DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID,
-        DEFAULT_SCOPE_ID,
-    };
+    use crate::testutil::test_utilities::{default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate, InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, DEFAULT_ORACLE_ADDRESS};
     use crate::util::constants::{
         ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY,
         REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
@@ -369,6 +372,7 @@ mod tests {
                 payable_type: "wrong-payable-type".into(),
                 payable_uuid: DEFAULT_PAYABLE_UUID.into(),
                 scope_id: DEFAULT_SCOPE_ID.into(),
+                oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
                 payable_denom: DEFAULT_PAYABLE_DENOM.into(),
                 payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
             },

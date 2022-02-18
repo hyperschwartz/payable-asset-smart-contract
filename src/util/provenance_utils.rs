@@ -27,7 +27,7 @@ pub fn get_add_initial_attribute_to_scope_msg(
     contract_name: impl Into<String>,
 ) -> Result<CosmosMsg<ProvenanceMsg>, ContractError> {
     if query_payable_attribute_by_scope_id(&deps, &attribute.scope_id).is_ok() {
-        return ContractError::DuplicateRegistration { scope_id: attribute.scope_id.into() }.to_result();
+        return ContractError::DuplicateRegistration { scope_id: attribute.scope_id.clone() }.to_result();
     }
     get_add_attribute_to_scope_msg(attribute, contract_name)
 }
@@ -51,11 +51,12 @@ pub fn upsert_attribute_to_scope(
     attribute: &PayableScopeAttribute,
     contract_name: impl Into<String>,
 ) -> Result<WriteAttributeMessages, ContractError> {
+    let contract_name = contract_name.into();
     let delete_attributes_msg = delete_attributes(
         Addr::unchecked(&attribute.scope_id),
         &contract_name,
     ).map_err(ContractError::Std)?;
-    let add_attribute_msg = get_add_attribute_to_scope_msg(attribute, contract_name)?;
+    let add_attribute_msg = get_add_attribute_to_scope_msg(attribute, &contract_name)?;
     Ok(WriteAttributeMessages {
         delete_attributes_msg,
         add_attribute_msg,

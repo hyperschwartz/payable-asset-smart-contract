@@ -1,5 +1,5 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, config_v2};
+use crate::core::state::{config_v2};
 use crate::migrate::version_info::{
     get_version_info, migrate_version_info, CONTRACT_NAME, CONTRACT_VERSION,
 };

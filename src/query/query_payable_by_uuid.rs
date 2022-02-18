@@ -11,20 +11,20 @@ pub fn query_payable_binary_by_uuid(
     deps: &Deps<ProvenanceQuery>,
     payable_uuid: impl Into<String>,
 ) -> Result<Binary, ContractError> {
-    query_payable_binary_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, &payable_uuid))
+    query_payable_binary_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, payable_uuid)?)
 }
 
 pub fn query_payable_attribute_by_uuid(
     deps: &Deps<ProvenanceQuery>,
     payable_uuid: impl Into<String>,
 ) -> Result<PayableScopeAttribute, ContractError> {
-    query_payable_attribute_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, &payable_uuid))
+    query_payable_attribute_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, payable_uuid)?)
 }
 
-fn get_scope_id_for_payable_uuid(deps: &Deps<ProvenanceQuery>, payable_uuid: impl Into<String>) -> String {
-    payable_meta_storage_read_v2(deps.storage)
+fn get_scope_id_for_payable_uuid(deps: &Deps<ProvenanceQuery>, payable_uuid: impl Into<String>) -> Result<String, ContractError> {
+    Ok(payable_meta_storage_read_v2(deps.storage)
         .load(payable_uuid.into().as_bytes())
-    ?.scope_id
+    ?.scope_id)
 }
 
 #[cfg(test)]
@@ -60,7 +60,7 @@ mod tests {
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
