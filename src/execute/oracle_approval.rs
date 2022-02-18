@@ -1,11 +1,13 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, payable_meta_storage};
-use crate::util::constants::{ORACLE_APPROVED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY};
+use crate::core::state::{config_read_v2};
+use crate::util::constants::{ORACLE_ADDRESS_KEY, ORACLE_APPROVED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY};
 use cosmwasm_std::{coin, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
+use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
+use crate::util::provenance_utils::upsert_attribute_to_scope;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OracleApprovalV1 {
@@ -22,29 +24,26 @@ pub fn oracle_approval(
     if !info.funds.is_empty() {
         return Err(ContractError::FundsPresent);
     }
-    let state = config(deps.storage).load()?;
-    // Only the designated oracle can mark an approval on a denomination
-    if info.sender != state.oracle_address {
-        return Err(ContractError::Unauthorized);
-    }
-    let mut payables_bucket = payable_meta_storage(deps.storage);
-    // Ensure the target payable definition actually exists
-    let mut target_payable = match payables_bucket.load(oracle_approval.payable_uuid.as_bytes()) {
-        Ok(meta) => {
-            if meta.oracle_approved {
-                return Err(ContractError::DuplicateApproval {
+    let mut scope_attribute = match query_payable_attribute_by_uuid(&deps.as_ref(), &oracle_approval.payable_uuid) {
+        Ok(attr) => {
+            if attr.oracle_approved {
+                return ContractError::DuplicateApproval {
                     payable_uuid: oracle_approval.payable_uuid,
-                });
+                }.to_result();
             }
-            meta
+            attr
         }
         Err(_) => {
-            return Err(ContractError::PayableNotFound {
+            return ContractError::PayableNotFound {
                 payable_uuid: oracle_approval.payable_uuid,
-            });
+            }.to_result();
         }
     };
-    // TODO: Tag an attribute on the scope once functionality is available
+    // Only the designated oracle can mark an approval on a denomination
+    if info.sender != scope_attribute.oracle_address {
+        return Err(ContractError::Unauthorized);
+    }
+    let state = config_read_v2(deps.storage).load()?;
     // The oracle is paid X on each approval, where X is the remaining amount after the fee is taken
     // from the onboarding funds.
     let oracle_withdraw_amount =
@@ -52,17 +51,20 @@ pub fn oracle_approval(
     // Only create a payment to the oracle if there were funds stored in the first place
     if oracle_withdraw_amount.u128() > 0 {
         messages.push(CosmosMsg::Bank(BankMsg::Send {
-            to_address: state.oracle_address.into(),
+            to_address: scope_attribute.oracle_address.into(),
             amount: vec![coin(oracle_withdraw_amount.u128(), state.onboarding_denom)],
         }));
     }
-    target_payable.oracle_approved = true;
-    payables_bucket.save(oracle_approval.payable_uuid.as_bytes(), &target_payable)?;
+    scope_attribute.oracle_approved = true;
+    // Add messages that will remove the current attribute and replace it with the attribute with an
+    // oracle approval on it
+    messages.append(&mut upsert_attribute_to_scope(&scope_attribute, &state.contract_name)?.to_vec());
     Ok(Response::new()
         .add_messages(messages)
-        .add_attribute(ORACLE_APPROVED_KEY, &target_payable.payable_uuid)
-        .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
-        .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid))
+        .add_attribute(ORACLE_APPROVED_KEY, &scope_attribute.payable_uuid)
+        .add_attribute(PAYABLE_TYPE_KEY, &scope_attribute.payable_type)
+        .add_attribute(PAYABLE_UUID_KEY, &scope_attribute.payable_uuid)
+        .add_attribute(ORACLE_ADDRESS_KEY, &scope_attribute.oracle_address.as_str()))
 }
 
 #[cfg(test)]

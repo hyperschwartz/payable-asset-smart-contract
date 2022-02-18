@@ -16,6 +16,9 @@ pub enum ContractError {
     #[error("Payable with uuid {payable_uuid} has already been approved")]
     DuplicateApproval { payable_uuid: String },
 
+    #[error("Scope with id {scope_id} has already been registered")]
+    DuplicateRegistration { scope_id: String },
+
     #[error("Funds were provided for an operation that does not require them")]
     FundsPresent,
 
@@ -52,6 +55,12 @@ pub enum ContractError {
     InvalidPayable {
         payable_uuid: String,
         invalid_reason: String,
+    },
+
+    #[error("Expected only a single payable attribute on scope {scope_id}, but found {attribute_amount}")]
+    InvalidScopeAttribute {
+        scope_id: String,
+        attribute_amount: usize,
     },
 
     #[error("No funds of type {valid_denom} were provided")]

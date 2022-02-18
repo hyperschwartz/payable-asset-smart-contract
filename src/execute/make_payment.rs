@@ -1,12 +1,10 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, payable_meta_storage};
-use crate::util::constants::{
-    PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY,
-    TOTAL_REMAINING_KEY,
-};
-use crate::util::provenance_utils::get_scope_by_id;
+use crate::core::state::{config_read_v2};
+use crate::util::constants::{ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY};
+use crate::util::provenance_utils::{get_scope_by_id, upsert_attribute_to_scope};
 use cosmwasm_std::{coin, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
+use crate::query::query_payable_by_uuid::{query_payable_attribute_by_uuid};
 
 pub struct MakePaymentV1 {
     pub payable_uuid: String,
@@ -17,16 +15,15 @@ pub fn make_payment(
     info: MessageInfo,
     make_payment: MakePaymentV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let mut payables_bucket = payable_meta_storage(deps.storage);
-    let mut target_payable = match payables_bucket.load(make_payment.payable_uuid.as_bytes()) {
-        Ok(meta) => {
-            if !meta.oracle_approved {
+    let mut scope_attribute = match query_payable_attribute_by_uuid(&deps.as_ref(), &make_payment.payable_uuid) {
+        Ok(attr) => {
+            if !attr.oracle_approved {
                 return Err(ContractError::NotReadyForPayment {
                     payable_uuid: meta.payable_uuid,
                     not_ready_reason: "Payable missing oracle approval".into(),
                 });
             }
-            meta
+            attr
         }
         Err(_) => {
             return Err(ContractError::PayableNotFound {
@@ -38,7 +35,7 @@ pub fn make_payment(
         .funds
         .iter()
         .filter_map(|coin| {
-            if coin.denom != target_payable.payable_denom {
+            if coin.denom != scope_attribute.payable_denom {
                 Some(coin.denom.clone())
             } else {
                 None
@@ -47,7 +44,7 @@ pub fn make_payment(
         .collect::<Vec<String>>();
     if !invalid_funds.is_empty() {
         return Err(ContractError::InvalidFundsProvided {
-            valid_denom: target_payable.payable_denom,
+            valid_denom: scope_attribute.payable_denom,
             invalid_denoms: invalid_funds,
         });
     }
@@ -61,35 +58,39 @@ pub fn make_payment(
     // function executes.
     if payment_amount == 0 {
         return Err(ContractError::NoFundsProvided {
-            valid_denom: target_payable.payable_denom,
+            valid_denom: scope_attribute.payable_denom,
         });
     }
-    if payment_amount > target_payable.payable_remaining_owed.u128() {
+    if payment_amount > scope_attribute.payable_remaining_owed.u128() {
         return Err(ContractError::PaymentTooLarge {
-            total_owed: target_payable.payable_remaining_owed.u128(),
+            total_owed: scope_attribute.payable_remaining_owed.u128(),
             amount_provided: payment_amount,
         });
     }
-
-    let scope = get_scope_by_id(&deps.querier, target_payable.scope_id.as_str())?;
+    let scope = get_scope_by_id(&deps.querier, &scope_attribute.scope_id)?;
     let payee = scope.value_owner_address;
     let payment_message = CosmosMsg::Bank(BankMsg::Send {
         to_address: payee.to_string(),
-        amount: vec![coin(payment_amount, &target_payable.payable_denom)],
+        amount: vec![coin(payment_amount, &scope_attribute.payable_denom)],
     });
     // Subtract payment amount from tracked total
-    target_payable.payable_remaining_owed =
-        (target_payable.payable_remaining_owed.u128() - payment_amount).into();
-    payables_bucket.save(target_payable.payable_uuid.as_bytes(), &target_payable)?;
-    // Load state to derive payable type
-    let state = config(deps.storage).load()?;
+    scope_attribute.payable_remaining_owed =
+        (scope_attribute.payable_remaining_owed.u128() - payment_amount).into();
+    // Load state to derive payable type and contract name
+    let state = config_read_v2(deps.storage).load()?;
+    let upsert_attribute_msgs = upsert_attribute_to_scope(
+        &scope_attribute,
+        &state.contract_name,
+    )?;
     Ok(Response::new()
         .add_message(payment_message)
-        .add_attribute(PAYMENT_MADE_KEY, &target_payable.payable_uuid)
+        .add_messages(upsert_attribute_msgs.to_vec())
+        .add_attribute(PAYMENT_MADE_KEY, &scope_attribute.payable_uuid)
         .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
-        .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid)
+        .add_attribute(PAYABLE_UUID_KEY, &scope_attribute.payable_uuid)
+        .add_attribute(ORACLE_ADDRESS_KEY, &scope_attribute.oracle_address)
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
-        .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed)
+        .add_attribute(TOTAL_REMAINING_KEY, &scope_attribute.payable_remaining_owed)
         .add_attribute(PAYER_KEY, &info.sender.to_string())
         .add_attribute(PAYEE_KEY, payee.as_str()))
 }

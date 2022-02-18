@@ -1,15 +1,30 @@
 use crate::core::error::ContractError;
-use crate::core::state::payable_meta_storage_read;
-use cosmwasm_std::{to_binary, Binary, Deps};
+use crate::core::state::{payable_meta_storage_read_v2, PayableScopeAttribute};
+use cosmwasm_std::{Binary, Deps};
 use provwasm_std::ProvenanceQuery;
+use crate::query::query_payable_by_scope_id::{query_payable_attribute_by_scope_id, query_payable_binary_by_scope_id};
 
-pub fn query_payable(
-    deps: Deps<ProvenanceQuery>,
-    payable_uuid: String,
+/// Finds the scope_id by looking up local storage for the payable uuid link, and funnels the result
+/// into the query_payable_by_scope_id function, which pulls all the data from the actual scope's
+/// attribute list.
+pub fn query_payable_binary_by_uuid(
+    deps: &Deps<ProvenanceQuery>,
+    payable_uuid: impl Into<String>,
 ) -> Result<Binary, ContractError> {
-    let meta_storage = payable_meta_storage_read(deps.storage);
-    let payable_meta = meta_storage.load(payable_uuid.as_bytes())?;
-    Ok(to_binary(&payable_meta)?)
+    query_payable_binary_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, &payable_uuid))
+}
+
+pub fn query_payable_attribute_by_uuid(
+    deps: &Deps<ProvenanceQuery>,
+    payable_uuid: impl Into<String>,
+) -> Result<PayableScopeAttribute, ContractError> {
+    query_payable_attribute_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, &payable_uuid))
+}
+
+fn get_scope_id_for_payable_uuid(deps: &Deps<ProvenanceQuery>, payable_uuid: impl Into<String>) -> String {
+    payable_meta_storage_read_v2(deps.storage)
+        .load(payable_uuid.into().as_bytes())
+    ?.scope_id
 }
 
 #[cfg(test)]
@@ -27,7 +42,7 @@ mod tests {
     use provwasm_mocks::mock_dependencies;
 
     #[test]
-    fn test_query_payable_after_register() {
+    fn test_query_payable_by_uuid_after_register() {
         let mut deps = mock_dependencies(&[]);
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
         deps.querier

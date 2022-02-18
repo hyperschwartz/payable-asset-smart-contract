@@ -32,3 +32,4 @@ pub const MIGRATION_CONTRACT_VERSION: &str = "payable_migration_contract_version
 /// Shared output attributes
 pub const PAYABLE_UUID_KEY: &str = "payable_uuid"; // Value = Payable UUID (String)
 pub const PAYABLE_TYPE_KEY: &str = "payable_type"; // Value = Payable Type (String)
+pub const ORACLE_ADDRESS_KEY: &str = "payable_oracle_address"; // Value = The address of the oracle associated with the payable (String)

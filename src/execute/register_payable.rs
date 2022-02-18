@@ -1,21 +1,19 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, payable_meta_storage, PayableMeta, State};
-use crate::util::constants::{
-    ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY,
-    REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
-};
-use crate::util::provenance_utils::get_scope_by_id;
-use cosmwasm_std::{coin, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128};
+use crate::core::state::{config, config_read_v2, payable_meta_storage, PayableMeta, PayableMetaV2, PayableScopeAttribute, State};
+use crate::util::constants::{ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY};
+use crate::util::provenance_utils::{get_add_initial_attribute_to_scope_msg, get_scope_by_id};
+use cosmwasm_std::{coin, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128, Addr};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct RegisterPayableV1 {
+pub struct RegisterPayableV2 {
     pub payable_type: String,
     pub payable_uuid: String,
     pub scope_id: String,
+    pub oracle_address: String,
     pub payable_denom: String,
     pub payable_total: Uint128,
 }
@@ -23,18 +21,8 @@ pub struct RegisterPayableV1 {
 pub fn register_payable(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
-    register: RegisterPayableV1,
+    register: RegisterPayableV2,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let state = config(deps.storage).load()?;
-    if state.payable_type != register.payable_type {
-        return Err(ContractError::InvalidPayable {
-            payable_uuid: register.payable_uuid,
-            invalid_reason: format!(
-                "this contract accepts payables of type [{}], but received type [{}]",
-                state.payable_type, register.payable_type
-            ),
-        });
-    }
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
@@ -59,6 +47,7 @@ pub fn register_payable(
             ),
         ));
     }
+    let state = config_read_v2(deps.storage).load()?;
     // If the sender's address is not listed as an owner address on the target scope for the payable,
     // then they are not authorized to register this payable.
     // Skip this step locally - creating a scope is an unnecessary piece of testing this
@@ -79,6 +68,7 @@ pub fn register_payable(
     ));
     attributes.push(Attribute::new(PAYABLE_TYPE_KEY, &register.payable_type));
     attributes.push(Attribute::new(PAYABLE_UUID_KEY, &register.payable_uuid));
+    attributes.push(Attribute::new(ORACLE_ADDRESS_KEY, &register.oracle_address));
     attributes.push(Attribute::new(
         TOTAL_OWED_KEY,
         &register.payable_total.to_string(),
@@ -88,16 +78,17 @@ pub fn register_payable(
         &register.payable_denom,
     ));
     attributes.push(Attribute::new(SCOPE_ID_KEY, &register.scope_id));
-    let payable_meta = PayableMeta {
+    let scope_attribute = PayableScopeAttribute {
+        payable_type: register.payable_type,
         payable_uuid: register.payable_uuid,
         scope_id: register.scope_id,
-        payable_denom: register.payable_denom,
+        oracle_address: Addr::unchecked(register.oracle_address),
+        payable_denom: String,
         payable_total_owed: register.payable_total,
         payable_remaining_owed: register.payable_total,
         oracle_approved: false,
     };
-    let mut meta_storage = payable_meta_storage(deps.storage);
-    meta_storage.save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
+    messages.push(get_add_initial_attribute_to_scope_msg(&deps.as_ref(), &scope_attribute, &state.contract_name)?);
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))

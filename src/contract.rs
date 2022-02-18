@@ -2,14 +2,15 @@ use crate::core::error::ContractError;
 use crate::core::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
 use crate::execute::make_payment::{make_payment, MakePaymentV1};
 use crate::execute::oracle_approval::{oracle_approval, OracleApprovalV1};
-use crate::execute::register_payable::{register_payable, RegisterPayableV1};
+use crate::execute::register_payable::{register_payable, RegisterPayableV2};
 use crate::instantiate::init_contract::init_contract;
 use crate::migrate::migrate_contract::migrate_contract;
-use crate::query::query_payable::query_payable;
+use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
 use crate::query::query_state::query_state;
 use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
+use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 
 /// Initialize the contract
 #[entry_point]
@@ -35,7 +36,8 @@ pub fn query(
     msg.validate()?;
     match msg {
         QueryMsg::QueryState {} => query_state(deps),
-        QueryMsg::QueryPayable { payable_uuid } => query_payable(deps, payable_uuid),
+        QueryMsg::QueryPayableByScopeId { scope_id } => query_payable_binary_by_scope_id(&deps, scope_id),
+        QueryMsg::QueryPayableByUuid { payable_uuid } => query_payable_binary_by_uuid(&deps, payable_uuid),
     }
 }
 
@@ -54,15 +56,17 @@ pub fn execute(
             payable_type,
             payable_uuid,
             scope_id,
+            oracle_address,
             payable_denom,
             payable_total,
         } => register_payable(
             deps,
             info,
-            RegisterPayableV1 {
+            RegisterPayableV2 {
                 payable_type,
                 payable_uuid,
                 scope_id,
+                oracle_address,
                 payable_denom,
                 payable_total,
             },
@@ -85,6 +89,6 @@ pub fn migrate(
 ) -> Result<Response, ContractError> {
     // Ensure that the message is valid before processing the request
     msg.validate()?;
-    let migrate_msg = msg.to_migrate_contract_v1(&deps.as_ref())?;
+    let migrate_msg = msg.to_migrate_contract_v2(&deps.as_ref())?;
     migrate_contract(deps, migrate_msg)
 }

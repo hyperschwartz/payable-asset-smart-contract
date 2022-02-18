@@ -21,13 +21,11 @@ pub const DEFAULT_PAYABLE_DENOM: &str = "nhash";
 pub struct InstArgs {
     pub env: Env,
     pub info: MessageInfo,
-    pub payable_type: String,
     pub contract_name: String,
     pub onboarding_cost: String,
     pub onboarding_denom: String,
     pub fee_collection_address: String,
     pub fee_percent: Decimal,
-    pub oracle_address: String,
     pub is_local: bool,
 }
 impl Default for InstArgs {
@@ -35,13 +33,11 @@ impl Default for InstArgs {
         InstArgs {
             env: mock_env(),
             info: mock_info(DEFAULT_INFO_NAME, &[]),
-            payable_type: DEFAULT_PAYABLE_TYPE.into(),
             contract_name: DEFAULT_CONTRACT_NAME.into(),
             onboarding_cost: DEFAULT_ONBOARDING_COST.into(),
             onboarding_denom: DEFAULT_ONBOARDING_DENOM.into(),
             fee_collection_address: DEFAULT_FEE_COLLECTION_ADDRESS.into(),
             fee_percent: Decimal::percent(DEFAULT_FEE_PERCENT),
-            oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
             is_local: false,
         }
     }
@@ -56,13 +52,11 @@ pub fn test_instantiate(
         args.env,
         args.info,
         InitMsg {
-            payable_type: args.payable_type,
             contract_name: args.contract_name,
             onboarding_cost: args.onboarding_cost,
             onboarding_denom: args.onboarding_denom,
             fee_collection_address: args.fee_collection_address,
             fee_percent: args.fee_percent,
-            oracle_address: args.oracle_address,
             is_local: Some(args.is_local),
         },
     )

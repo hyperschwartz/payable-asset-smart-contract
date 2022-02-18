@@ -1,6 +1,6 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
-use crate::core::state::{config, State};
+use crate::core::state::{config, config_v2, State, StateV2};
 use crate::migrate::version_info::migrate_version_info;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
@@ -17,8 +17,7 @@ pub fn init_contract(
     }
 
     // Create and save contract config state. The name is used for setting attributes on user accounts
-    config(deps.storage).save(&State {
-        payable_type: msg.payable_type.clone(),
+    config_v2(deps.storage).save(&StateV2 {
         contract_name: msg.contract_name.clone(),
         onboarding_cost: Uint128::new(msg.onboarding_cost.parse::<u128>().unwrap()),
         onboarding_denom: msg.onboarding_denom.clone(),
@@ -26,7 +25,6 @@ pub fn init_contract(
             .api
             .addr_validate(msg.fee_collection_address.as_str())?,
         fee_percent: msg.fee_percent,
-        oracle_address: deps.api.addr_validate(msg.oracle_address.as_str())?,
         // Always default to non-local if the value is not provided
         is_local: msg.is_local.unwrap_or(false),
     })?;
@@ -71,7 +69,6 @@ mod tests {
                 onboarding_denom: "usdf".into(),
                 fee_collection_address: "test-address".into(),
                 fee_percent: Decimal::percent(50),
-                oracle_address: "oracle".into(),
                 ..Default::default()
             },
         )

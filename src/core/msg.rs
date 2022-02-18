@@ -3,16 +3,14 @@ use cosmwasm_std::{CustomQuery, Decimal, Deps, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::state::State;
-use crate::migrate::migrate_contract::MigrateContractV1;
+use crate::core::state::{StateV2};
+use crate::migrate::migrate_contract::{MigrateContractV1, MigrateContractV2};
 use crate::util::conversions::to_uint128;
 use crate::util::traits::ValidatedMsg;
 
 /// A message sent to initialize the contract state.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
-    // The type of payable that this contract handles. All incoming registration requests will validate that the source is this type.
-    pub payable_type: String,
     // Name of the contract that is tagged on various things
     pub contract_name: String,
     // Cost to onboard each payable
@@ -23,17 +21,12 @@ pub struct InitMsg {
     pub fee_collection_address: String,
     // Percentage of each transaction that is taken as fee
     pub fee_percent: Decimal,
-    // Address of the oracle application that can withdraw excess fees after fee percent is removed from onboarding_cost
-    pub oracle_address: String,
     // Whether or not this contract should have assistance for local environments
     pub is_local: Option<bool>,
 }
 impl ValidatedMsg for InitMsg {
     fn validate(&self) -> Result<(), ContractError> {
         let mut invalid_fields: Vec<&str> = vec![];
-        if self.payable_type.is_empty() {
-            invalid_fields.push("payable_type");
-        }
         if self.contract_name.is_empty() {
             invalid_fields.push("contract_name");
         }
@@ -48,9 +41,6 @@ impl ValidatedMsg for InitMsg {
         }
         if self.fee_percent > Decimal::one() {
             invalid_fields.push("fee_percent");
-        }
-        if self.oracle_address.is_empty() {
-            invalid_fields.push("oracle_address");
         }
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
@@ -68,6 +58,7 @@ pub enum ExecuteMsg {
         payable_type: String,
         payable_uuid: String,
         scope_id: String,
+        oracle_address: String,
         payable_denom: String,
         payable_total: Uint128,
     },
@@ -86,6 +77,7 @@ impl ValidatedMsg for ExecuteMsg {
                 payable_type,
                 payable_uuid,
                 scope_id,
+                oracle_address,
                 payable_denom,
                 payable_total,
             } => {
@@ -97,6 +89,9 @@ impl ValidatedMsg for ExecuteMsg {
                 }
                 if scope_id.is_empty() {
                     invalid_fields.push("scope_id");
+                }
+                if oracle_address.is_empty() {
+                    invalid_fields.push("oracle_address");
                 }
                 if payable_denom.is_empty() {
                     invalid_fields.push("payable_denom");
@@ -129,18 +124,24 @@ impl ValidatedMsg for ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     QueryState {},
-    QueryPayable { payable_uuid: String },
+    QueryPayableByScopeId { scope_id: String },
+    QueryPayableByUuid { payable_uuid: String },
 }
 impl ValidatedMsg for QueryMsg {
     fn validate(&self) -> Result<(), ContractError> {
         let mut invalid_fields: Vec<&str> = vec![];
         match self {
             QueryMsg::QueryState {} => (),
-            QueryMsg::QueryPayable { payable_uuid } => {
+            QueryMsg::QueryPayableByScopeId { scope_id } => {
+                if scope_id.is_empty() {
+                    invalid_fields.push("scope_id");
+                }
+            },
+            QueryMsg::QueryPayableByUuid { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            }
+            },
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
@@ -151,7 +152,7 @@ impl ValidatedMsg for QueryMsg {
 }
 
 /// A type alias for contract state.
-pub type QueryResponse = State;
+pub type QueryResponse = StateV2;
 
 /// Migrate the contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -230,13 +231,37 @@ impl MigrateMsg {
             oracle_address,
         })
     }
+
+    pub fn to_migrate_contract_v2<T: CustomQuery>(
+        self,
+        deps: &Deps<T>,
+    ) -> Result<MigrateContractV2, ContractError> {
+        // Unbox mapped fields, convert and validate, and re-box if necessary. Otherwise,
+        // pass-through to None
+        let onboarding_cost = if let Some(cost) = self.onboarding_cost {
+            Some(to_uint128(cost)?)
+        } else {
+            None
+        };
+        let fee_collection_address = if let Some(fee_addr) = self.fee_collection_address {
+            Some(deps.api.addr_validate(fee_addr.as_str())?)
+        } else {
+            None
+        };
+        Ok(MigrateContractV2 {
+            onboarding_cost,
+            onboarding_denom: self.onboarding_denom,
+            fee_collection_address,
+            fee_percent: self.fee_percent,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::core::error::ContractError;
     use crate::core::msg::ExecuteMsg::{MakePayment, OracleApproval};
-    use crate::core::msg::QueryMsg::{QueryPayable, QueryState};
+    use crate::core::msg::QueryMsg::{QueryPayableByUuid, QueryState};
     use crate::core::msg::{ExecuteMsg, InitMsg, MigrateMsg};
     use crate::util::traits::ValidatedMsg;
     use cosmwasm_std::{Decimal, Uint128};
@@ -247,14 +272,6 @@ mod tests {
         get_valid_init_msg()
             .validate()
             .expect("a populated init msg should pass validation");
-    }
-
-    #[test]
-    fn test_invalid_init_msg_payable_type() {
-        let mut msg = get_valid_init_msg();
-        // Empty string bad
-        msg.payable_type = String::new();
-        test_invalid_msg(&msg, "payable_type");
     }
 
     #[test]
@@ -290,14 +307,6 @@ mod tests {
         // Over 100% bad
         msg.fee_percent = Decimal::percent(101);
         test_invalid_msg(&msg, "fee_percent");
-    }
-
-    #[test]
-    fn test_invalid_init_msg_oracle_address() {
-        let mut msg = get_valid_init_msg();
-        // Empty string bad
-        msg.oracle_address = String::new();
-        test_invalid_msg(&msg, "oracle_address");
     }
 
     #[test]
@@ -394,8 +403,8 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_query_query_payable() {
-        QueryPayable {
+    fn test_valid_query_query_payable_by_uuid() {
+        QueryPayableByUuid {
             payable_uuid: "3ee3a636-8f83-11ec-8c26-6b8cbb24f4aa".to_string(),
         }
         .validate()
@@ -403,9 +412,9 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_query_query_payable_uuid() {
+    fn test_invalid_query_query_by_uuid_payable_uuid() {
         test_invalid_msg(
-            &QueryPayable {
+            &QueryPayableByUuid {
                 payable_uuid: String::new(),
             },
             "payable_uuid",
@@ -497,13 +506,11 @@ mod tests {
 
     fn get_valid_init_msg() -> InitMsg {
         InitMsg {
-            payable_type: "test".to_string(),
             contract_name: "test".to_string(),
             onboarding_cost: "100".to_string(),
             onboarding_denom: "nhash".to_string(),
             fee_collection_address: "addr".to_string(),
             fee_percent: Decimal::percent(50),
-            oracle_address: "addr".to_string(),
             is_local: Some(true),
         }
     }

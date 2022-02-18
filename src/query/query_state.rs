@@ -1,10 +1,10 @@
 use crate::core::error::ContractError;
-use crate::core::state::config_read;
+use crate::core::state::{config_read_v2};
 use cosmwasm_std::{to_binary, Binary, Deps};
 use provwasm_std::ProvenanceQuery;
 
 pub fn query_state(deps: Deps<ProvenanceQuery>) -> Result<Binary, ContractError> {
-    let state = config_read(deps.storage).load()?;
+    let state = config_read_v2(deps.storage).load()?;
     Ok(to_binary(&state)?)
 }
 
@@ -40,6 +40,5 @@ mod tests {
             resp.fee_collection_address.as_str()
         );
         assert_eq!(Decimal::percent(DEFAULT_FEE_PERCENT), resp.fee_percent);
-        assert_eq!(DEFAULT_ORACLE_ADDRESS, resp.oracle_address.as_str());
     }
 }
