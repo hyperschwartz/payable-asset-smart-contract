@@ -85,5 +85,6 @@ pub fn migrate(
 ) -> Result<Response, ContractError> {
     // Ensure that the message is valid before processing the request
     msg.validate()?;
-    migrate_contract(deps, msg)
+    let migrate_msg = msg.to_migrate_contract_v1(&deps.as_ref())?;
+    migrate_contract(deps, migrate_msg)
 }

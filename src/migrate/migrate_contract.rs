@@ -1,23 +1,109 @@
 use crate::core::error::ContractError;
-use crate::core::msg::MigrateMsg;
+use crate::core::state::config;
 use crate::migrate::version_info::{
     get_version_info, migrate_version_info, CONTRACT_NAME, CONTRACT_VERSION,
 };
-use crate::util::constants::{MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION};
-use cosmwasm_std::{DepsMut, Response, Storage};
+use crate::util::constants::{
+    MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION, MIGRATION_STATE_CHANGE_PREFIX,
+};
+use cosmwasm_std::{Addr, Attribute, Decimal, DepsMut, Response, Storage, Uint128};
 use provwasm_std::ProvenanceQuery;
 use semver::Version;
 
+pub struct MigrateContractV1 {
+    pub onboarding_cost: Option<Uint128>,
+    pub onboarding_denom: Option<String>,
+    pub fee_collection_address: Option<Addr>,
+    pub fee_percent: Option<Decimal>,
+    pub oracle_address: Option<Addr>,
+}
+impl MigrateContractV1 {
+    pub fn empty() -> MigrateContractV1 {
+        MigrateContractV1 {
+            onboarding_cost: None,
+            onboarding_denom: None,
+            fee_collection_address: None,
+            fee_percent: None,
+            oracle_address: None,
+        }
+    }
+
+    pub fn has_state_changes(&self) -> bool {
+        self.onboarding_cost.is_some()
+            || self.onboarding_denom.is_some()
+            || self.fee_collection_address.is_some()
+            || self.fee_percent.is_some()
+            || self.oracle_address.is_some()
+    }
+}
+
+/// Migrates the contract to a new version, utilizing the values within the msg param to determine
+/// which fields in the app state to change.
 pub fn migrate_contract(
     deps: DepsMut<ProvenanceQuery>,
-    _msg: MigrateMsg,
+    migrate: MigrateContractV1,
 ) -> Result<Response, ContractError> {
+    // Ensure the provided version info stored in the contract is valid for the migration before
+    // attempting any contract modifications
     check_valid_migration_versioning(deps.storage)?;
+    let mut attributes: Vec<Attribute> = vec![];
+    // Only load and modify the state if any optional values were provided during the migration
+    if migrate.has_state_changes() {
+        let mut contract_config = config(deps.storage);
+        let mut state = contract_config.load()?;
+        // Conditionally modify each portion of the state that has a requested change
+        if let Some(cost) = migrate.onboarding_cost {
+            attributes.push(state_change_attribute("onboarding_cost", &cost.to_string()));
+            state.onboarding_cost = cost;
+        }
+        if let Some(denom) = migrate.onboarding_denom {
+            attributes.push(state_change_attribute("onboarding_denom", &denom));
+            state.onboarding_denom = denom;
+        }
+        if let Some(fee_addr) = migrate.fee_collection_address {
+            attributes.push(state_change_attribute(
+                "fee_collection_address",
+                &fee_addr.to_string(),
+            ));
+            state.fee_collection_address = fee_addr;
+        }
+        if let Some(fee_percent) = migrate.fee_percent {
+            attributes.push(state_change_attribute(
+                "fee_percent",
+                &fee_percent.to_string(),
+            ));
+            state.fee_percent = fee_percent;
+        }
+        if let Some(oracle_address) = migrate.oracle_address {
+            attributes.push(state_change_attribute(
+                "oracle_address",
+                &oracle_address.to_string(),
+            ));
+            state.oracle_address = oracle_address;
+        }
+        // Persist all changes to the state after modifying them within this block
+        contract_config.save(&state)?;
+    }
     // Ensure that the new contract version is stored for future migrations to reference
     let new_version_info = migrate_version_info(deps.storage)?;
-    Ok(Response::new()
-        .add_attribute(MIGRATION_CONTRACT_NAME, &new_version_info.contract)
-        .add_attribute(MIGRATION_CONTRACT_VERSION, &new_version_info.version))
+    // Append attributes that indicate the contract name and version to which the migration brings the contract
+    attributes.push(Attribute::new(
+        MIGRATION_CONTRACT_NAME,
+        &new_version_info.contract,
+    ));
+    attributes.push(Attribute::new(
+        MIGRATION_CONTRACT_VERSION,
+        &new_version_info.version,
+    ));
+    Ok(Response::new().add_attributes(attributes))
+}
+
+fn state_change_attribute(field_name: impl Into<String>, value: impl Into<String>) -> Attribute {
+    Attribute::new(state_change_attr_name(field_name), value)
+}
+
+fn state_change_attr_name(field_name: impl Into<String>) -> String {
+    format!("{}{}", MIGRATION_STATE_CHANGE_PREFIX, field_name.into())
 }
 
 fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), ContractError> {
@@ -47,14 +133,79 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
 #[cfg(test)]
 mod tests {
     use crate::core::error::ContractError;
-    use crate::core::msg::MigrateMsg;
-    use crate::migrate::migrate_contract::migrate_contract;
+    use crate::core::state::config_read;
+    use crate::migrate::migrate_contract::{
+        migrate_contract, state_change_attr_name, state_change_attribute, MigrateContractV1,
+    };
     use crate::migrate::version_info::{
         get_version_info, set_version_info, VersionInfoV1, CONTRACT_NAME, CONTRACT_VERSION,
     };
     use crate::testutil::test_utilities::{single_attribute_for_key, test_instantiate, InstArgs};
     use crate::util::constants::{MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION};
+    use cosmwasm_std::{Addr, Decimal, Uint128};
     use provwasm_mocks::mock_dependencies;
+
+    #[test]
+    fn test_state_change_attr_name() {
+        assert_eq!(
+            "payable_migration_state_field_test_field",
+            state_change_attr_name("test_field").as_str(),
+            "the field name should be populated correctly",
+        );
+    }
+
+    #[test]
+    fn test_state_change_attribute() {
+        let attribute = state_change_attribute("some_field", "120");
+        assert_eq!(
+            "payable_migration_state_field_some_field",
+            attribute.key.as_str(),
+            "the key should be formatted correctly",
+        );
+        assert_eq!(
+            "120",
+            attribute.value.as_str(),
+            "the value should directly reflect the value passed into the function",
+        );
+    }
+
+    #[test]
+    fn test_migrate_msg_has_state_changes() {
+        let mut msg = MigrateContractV1::empty();
+        assert!(
+            !msg.has_state_changes(),
+            "an empty migrate contract v1 should not have state changes",
+        );
+        msg.onboarding_cost = Some(Uint128::new(100));
+        assert!(
+            msg.has_state_changes(),
+            "onboarding cost including a value should cause state changes",
+        );
+        msg.onboarding_cost = None;
+        msg.onboarding_denom = Some("nhash".to_string());
+        assert!(
+            msg.has_state_changes(),
+            "onboarding denom including a value should cause state changes",
+        );
+        msg.onboarding_denom = None;
+        msg.fee_collection_address = Some(Addr::unchecked("address"));
+        assert!(
+            msg.has_state_changes(),
+            "fee collection address including a value should cause state changes",
+        );
+        msg.fee_collection_address = None;
+        msg.fee_percent = Some(Decimal::percent(60));
+        assert!(
+            msg.has_state_changes(),
+            "fee percent including a value should cause state changes",
+        );
+        msg.fee_percent = None;
+        msg.oracle_address = Some(Addr::unchecked("address"));
+        assert!(
+            msg.has_state_changes(),
+            "oracle address including a value should cause state changes",
+        );
+    }
 
     #[test]
     fn test_successful_upgrade_migration() {
@@ -67,7 +218,11 @@ mod tests {
             },
         )
         .unwrap();
-        let response = migrate_contract(deps.as_mut(), MigrateMsg {}).unwrap();
+        let response = migrate_contract(deps.as_mut(), MigrateContractV1::empty()).unwrap();
+        assert!(
+            response.messages.is_empty(),
+            "no messages should be sent on migrate"
+        );
         assert_eq!(
             2,
             response.attributes.len(),
@@ -102,7 +257,11 @@ mod tests {
         // Instantiate the contract, automatically setting the version and contract name.
         // This can be seen working correctly in init_contract.rs > test_valid_init test
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let response = migrate_contract(deps.as_mut(), MigrateMsg {}).unwrap();
+        let response = migrate_contract(deps.as_mut(), MigrateContractV1::empty()).unwrap();
+        assert!(
+            response.messages.is_empty(),
+            "no messages should be sent on migrate"
+        );
         assert_eq!(
             2,
             response.attributes.len(),
@@ -132,6 +291,104 @@ mod tests {
     }
 
     #[test]
+    fn test_successful_state_change_migration() {
+        let mut deps = mock_dependencies(&[]);
+        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        let response = migrate_contract(
+            deps.as_mut(),
+            MigrateContractV1 {
+                onboarding_cost: Some(Uint128::new(134)),
+                onboarding_denom: Some("dogecoin".to_string()),
+                fee_collection_address: Some(Addr::unchecked("new-fee-addr")),
+                fee_percent: Some(Decimal::percent(12)),
+                oracle_address: Some(Addr::unchecked("new-oracle-addr")),
+            },
+        )
+        .unwrap();
+        assert!(
+            response.messages.is_empty(),
+            "no messages should be sent on migrate"
+        );
+        assert_eq!(
+            7,
+            response.attributes.len(),
+            "all migration attributes should be added because all fields were changed",
+        );
+        assert_eq!(
+            "134",
+            single_attribute_for_key(
+                &response,
+                state_change_attr_name("onboarding_cost").as_str()
+            ),
+            "the onboarding cost attribute should be added correctly",
+        );
+        assert_eq!(
+            "dogecoin",
+            single_attribute_for_key(
+                &response,
+                state_change_attr_name("onboarding_denom").as_str()
+            ),
+            "the onboarding denom attribute should be added correctly",
+        );
+        assert_eq!(
+            "new-fee-addr",
+            single_attribute_for_key(
+                &response,
+                state_change_attr_name("fee_collection_address").as_str()
+            ),
+            "the fee collection address attribute should be added correctly",
+        );
+        assert_eq!(
+            "0.12",
+            single_attribute_for_key(&response, state_change_attr_name("fee_percent").as_str()),
+            "the fee percent attribute should be added correctly",
+        );
+        assert_eq!(
+            "new-oracle-addr",
+            single_attribute_for_key(&response, state_change_attr_name("oracle_address").as_str()),
+            "the oracle address attribute should be added correctly",
+        );
+        assert_eq!(
+            CONTRACT_NAME,
+            single_attribute_for_key(&response, MIGRATION_CONTRACT_NAME),
+            "the contract name attribute should be added correctly",
+        );
+        assert_eq!(
+            CONTRACT_VERSION,
+            single_attribute_for_key(&response, MIGRATION_CONTRACT_VERSION),
+            "the contract version attribute should be added correctly",
+        );
+        let state = config_read(deps.as_ref().storage)
+            .load()
+            .expect("state should load properly");
+        assert_eq!(
+            Uint128::new(134),
+            state.onboarding_cost,
+            "onboarding cost should be properly updated in the state",
+        );
+        assert_eq!(
+            "dogecoin",
+            state.onboarding_denom.as_str(),
+            "onboarding denom should be properly updated in the state",
+        );
+        assert_eq!(
+            Addr::unchecked("new-fee-addr"),
+            state.fee_collection_address,
+            "fee collection address should be properly updated in the state",
+        );
+        assert_eq!(
+            Decimal::percent(12),
+            state.fee_percent,
+            "fee percent should be properly updated in the state",
+        );
+        assert_eq!(
+            Addr::unchecked("new-oracle-addr"),
+            state.oracle_address,
+            "oracle address should be properly updated in the state",
+        );
+    }
+
+    #[test]
     fn test_failed_migration_for_incorrect_name() {
         let mut deps = mock_dependencies(&[]);
         set_version_info(
@@ -142,7 +399,7 @@ mod tests {
             },
         )
         .unwrap();
-        match migrate_contract(deps.as_mut(), MigrateMsg {}).unwrap_err() {
+        match migrate_contract(deps.as_mut(), MigrateContractV1::empty()).unwrap_err() {
             ContractError::InvalidContractName {
                 current_contract,
                 migration_contract,
@@ -173,7 +430,7 @@ mod tests {
             },
         )
         .unwrap();
-        match migrate_contract(deps.as_mut(), MigrateMsg {}).unwrap_err() {
+        match migrate_contract(deps.as_mut(), MigrateContractV1::empty()).unwrap_err() {
             ContractError::InvalidContractVersion {
                 current_version,
                 migration_version,

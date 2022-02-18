@@ -25,6 +25,7 @@ pub const PAYER_KEY: &str = "payable_payer"; // Value = Bech32 address of the en
 pub const PAYEE_KEY: &str = "payable_payee"; // Value = Bech32 address of th entity that received the payment (String)
 
 /// Migration output attributes
+pub const MIGRATION_STATE_CHANGE_PREFIX: &str = "payable_migration_state_field_"; // Value = Name of the field in the state being altered by the migration (String)
 pub const MIGRATION_CONTRACT_NAME: &str = "payable_migration_contract_name"; // Value = Name of the contract being migrated to, which should never change (String)
 pub const MIGRATION_CONTRACT_VERSION: &str = "payable_migration_contract_version"; // Value = New contract version that has been migrated to (String)
 

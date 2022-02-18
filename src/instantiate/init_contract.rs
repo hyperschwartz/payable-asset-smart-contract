@@ -20,7 +20,7 @@ pub fn init_contract(
     config(deps.storage).save(&State {
         payable_type: msg.payable_type.clone(),
         contract_name: msg.contract_name.clone(),
-        onboarding_cost: Uint128::new(msg.onboarding_cost.as_str().parse::<u128>().unwrap()),
+        onboarding_cost: Uint128::new(msg.onboarding_cost.parse::<u128>().unwrap()),
         onboarding_denom: msg.onboarding_denom.clone(),
         fee_collection_address: deps
             .api
