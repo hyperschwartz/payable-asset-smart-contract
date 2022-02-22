@@ -1,44 +1,75 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, payable_meta_storage, PayableMeta, State};
-use crate::util::constants::{
-    ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY,
-    REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
+use crate::core::state::{
+    config_read_v2, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2,
 };
-use crate::util::provenance_utils::get_scope_by_id;
-use cosmwasm_std::{coin, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128};
+use crate::util::constants::{
+    ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY,
+    PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
+};
+use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
+use cosmwasm_std::{
+    coin, Addr, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128,
+};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
 
+/// Contains all relevant fields required in order to register a payable with the contract and
+/// stamp its scope with an attribute.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct RegisterPayableV1 {
+pub struct RegisterPayableV2 {
     pub payable_type: String,
     pub payable_uuid: String,
     pub scope_id: String,
+    pub oracle_address: String,
     pub payable_denom: String,
     pub payable_total: Uint128,
 }
+impl RegisterPayableV2 {
+    /// Due to the register message including all information required to drive the initial
+    /// attribute that is placed on a scope, this function facilitates that transformation in a
+    /// single line invocation.
+    pub fn to_scope_attribute(self) -> PayableScopeAttribute {
+        PayableScopeAttribute {
+            payable_type: self.payable_type,
+            payable_uuid: self.payable_uuid,
+            scope_id: self.scope_id,
+            oracle_address: Addr::unchecked(self.oracle_address),
+            payable_denom: self.payable_denom,
+            payable_total_owed: self.payable_total,
+            payable_remaining_owed: self.payable_total,
+            oracle_approved: false,
+        }
+    }
+}
 
+/// Parent function path for the contract to register a payable.  Ensures that the ProvenanceUtilImpl
+/// is the implementation used for this functionality outside of tests.
 pub fn register_payable(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
-    register: RegisterPayableV1,
+    register: RegisterPayableV2,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let state = config(deps.storage).load()?;
-    if state.payable_type != register.payable_type {
-        return Err(ContractError::InvalidPayable {
-            payable_uuid: register.payable_uuid,
-            invalid_reason: format!(
-                "this contract accepts payables of type [{}], but received type [{}]",
-                state.payable_type, register.payable_type
-            ),
-        });
-    }
+    register_payable_with_util(deps, &ProvenanceUtilImpl, info, register)
+}
+
+/// Registers a payable's uuid and scope with the contract with the following steps:
+/// - Charges the contract's configured fee for registration.
+/// - Refunds the registering entity if they provided too many funds.
+/// - Verifies that the related scope_id is owned by the sender.
+/// - Appends an attribute to the scope with all registered information under the contract's name.
+/// - Creates a link in local storage for scope_id and payable_uuid reverse lookups.
+pub fn register_payable_with_util<T: ProvenanceUtil>(
+    deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
+    info: MessageInfo,
+    register: RegisterPayableV2,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
     let mut attributes: Vec<Attribute> = vec![];
+    let state = config_read_v2(deps.storage).load()?;
     let fee_charge_response = validate_fee_params_get_messages(&info, &state)?;
-    // TODO: Tag the payable uuid on the scope as an attribute
     if let Some(fee_message) = fee_charge_response.fee_charge_message {
         messages.push(fee_message);
         attributes.push(Attribute::new(
@@ -63,7 +94,8 @@ pub fn register_payable(
     // then they are not authorized to register this payable.
     // Skip this step locally - creating a scope is an unnecessary piece of testing this
     if !state.is_local
-        && get_scope_by_id(&deps.querier, &register.scope_id)?
+        && provenance_util
+            .get_scope_by_id(&deps.querier, &register.scope_id)?
             .owners
             .into_iter()
             .filter(|owner| owner.address == info.sender)
@@ -79,6 +111,7 @@ pub fn register_payable(
     ));
     attributes.push(Attribute::new(PAYABLE_TYPE_KEY, &register.payable_type));
     attributes.push(Attribute::new(PAYABLE_UUID_KEY, &register.payable_uuid));
+    attributes.push(Attribute::new(ORACLE_ADDRESS_KEY, &register.oracle_address));
     attributes.push(Attribute::new(
         TOTAL_OWED_KEY,
         &register.payable_total.to_string(),
@@ -88,21 +121,27 @@ pub fn register_payable(
         &register.payable_denom,
     ));
     attributes.push(Attribute::new(SCOPE_ID_KEY, &register.scope_id));
-    let payable_meta = PayableMeta {
-        payable_uuid: register.payable_uuid,
-        scope_id: register.scope_id,
-        payable_denom: register.payable_denom,
-        payable_total_owed: register.payable_total,
-        payable_remaining_owed: register.payable_total,
-        oracle_approved: false,
+    // Tag the scope with an attribute that contains all information about its current payable
+    // status
+    let scope_attribute = register.to_scope_attribute();
+    messages.push(provenance_util.get_add_initial_attribute_to_scope_msg(
+        &deps.as_ref(),
+        &scope_attribute,
+        &state.contract_name,
+    )?);
+    // Store a link between the payable's uuid and the scope id in local storage for queries
+    let payable_meta = PayableMetaV2 {
+        payable_uuid: scope_attribute.payable_uuid,
+        scope_id: scope_attribute.scope_id,
     };
-    let mut meta_storage = payable_meta_storage(deps.storage);
-    meta_storage.save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
+    payable_meta_storage_v2(deps.storage)
+        .save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))
 }
 
+/// A helper struct that contains all output relevant to charging a fee for registration.
 struct FeeChargeResponse {
     fee_charge_message: Option<CosmosMsg<ProvenanceMsg>>,
     fee_refund_message: Option<CosmosMsg<ProvenanceMsg>>,
@@ -110,9 +149,11 @@ struct FeeChargeResponse {
     oracle_fee_amount_kept: u128,
 }
 
+/// Digests all relevant input and creates the appropriate fee messages (including an optional
+/// refund to the sender if required).
 fn validate_fee_params_get_messages(
     info: &MessageInfo,
-    state: &State,
+    state: &StateV2,
 ) -> Result<FeeChargeResponse, ContractError> {
     let invalid_funds = info
         .funds
@@ -188,43 +229,39 @@ fn validate_fee_params_get_messages(
 
 #[cfg(test)]
 mod tests {
-    use crate::contract::execute;
     use crate::core::error::ContractError;
     use crate::core::error::ContractError::Std;
-    use crate::core::msg::ExecuteMsg;
+    use crate::core::state::PayableScopeAttribute;
+    use crate::testutil::mock_provenance_util::MockProvenanceUtil;
+    use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
     use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
-        InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
-        DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID,
-        DEFAULT_SCOPE_ID,
+        get_duped_scope, setup_test_suite, single_attribute_for_key, test_instantiate, InstArgs,
+        DEFAULT_CONTRACT_NAME, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME,
+        DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM,
+        DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
     };
     use crate::util::constants::{
-        ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY,
-        REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
+        ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY,
+        PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
     };
-    use cosmwasm_std::testing::{mock_env, mock_info};
+    use cosmwasm_std::testing::mock_info;
     use cosmwasm_std::StdError::GenericErr;
-    use cosmwasm_std::{coin, BankMsg, CosmosMsg, Uint128};
+    use cosmwasm_std::{from_binary, BankMsg, CosmosMsg};
     use provwasm_mocks::mock_dependencies;
+    use provwasm_std::{
+        AttributeMsgParams, AttributeValueType, ProvenanceMsg, ProvenanceMsgParams,
+    };
 
     #[test]
     fn test_register_valid_no_refund() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
-        let response = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        // The default message will register a payable with the exact amount required for no refund
+        let response =
+            test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default())
+                .unwrap();
         assert_eq!(
-            7,
+            8,
             response.attributes.len(),
             "expected all registration attributes to be recorded"
         );
@@ -242,6 +279,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&response, PAYABLE_UUID_KEY),
             "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&response, ORACLE_ADDRESS_KEY),
+            "the ORACLE_ADDRESS_KEY value should equate to the oracle's address",
         );
         assert_eq!(
             DEFAULT_SCOPE_ID,
@@ -264,7 +306,7 @@ mod tests {
             "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
         );
         assert_eq!(
-            1,
+            2,
             response.messages.len(),
             "one message expected during registration: a fee charge",
         );
@@ -276,6 +318,27 @@ mod tests {
                 assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
                 assert_eq!(DEFAULT_ONBOARDING_DENOM, coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
             },
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                                                       name, value, value_type, ..
+                                                   }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    },
+                    _ => panic!("unexpected provenance msg params"),
+                }
+            },
             _ => panic!("unexpected response message type"),
         });
     }
@@ -283,21 +346,15 @@ mod tests {
     #[test]
     fn test_register_valid_with_refund() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
-        let response = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(150, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let response = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable::default_with_amount(150),
         )
         .unwrap();
         assert_eq!(
-            8,
+            9,
             response.attributes.len(),
             "expected all registration attributes to be recorded"
         );
@@ -315,6 +372,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&response, PAYABLE_UUID_KEY),
             "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&response, ORACLE_ADDRESS_KEY),
+            "the ORACLE_ADDRESS_KEY value should equate to the oracle address",
         );
         assert_eq!(
             DEFAULT_SCOPE_ID,
@@ -342,7 +404,7 @@ mod tests {
             "the refund amount should equal the amount provided over the onboarding cost (150 - 100)",
         );
         assert_eq!(
-            2,
+            3,
             response.messages.len(),
             "two messages expected during registration: a fee charge and a fee refund",
         );
@@ -362,56 +424,39 @@ mod tests {
                     _ => panic!("unexpected address for bank message send"),
                 }
             },
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name, value, value_type, ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    },
+                    _ => panic!("unexpected provenance msg params"),
+                }
+            },
             _ => panic!("unexpected response message type"),
         });
     }
 
     #[test]
-    fn test_register_invalid_payable_type() {
-        let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[coin(100, DEFAULT_ONBOARDING_DENOM)]),
-            ExecuteMsg::RegisterPayable {
-                payable_type: "wrong-payable-type".into(),
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-                scope_id: DEFAULT_SCOPE_ID.into(),
-                payable_denom: DEFAULT_PAYABLE_DENOM.into(),
-                payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
-            },
-        )
-        .unwrap_err();
-        match failure {
-            ContractError::InvalidPayable {
-                payable_uuid,
-                invalid_reason,
-            } => {
-                assert_eq!(
-                    DEFAULT_PAYABLE_UUID,
-                    payable_uuid.as_str(),
-                    "expected the attempted payable uuid to be input"
-                );
-                assert_eq!(
-                    "this contract accepts payables of type [invoice], but received type [wrong-payable-type]",
-                    invalid_reason,
-                    "expected the correct message to be added to the message",
-                );
-            }
-            _ => panic!("unexpected contract error encountered"),
-        };
-    }
-
-    #[test]
     fn test_register_invalid_fund_denom() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[coin(100, "nothash".to_string())]),
-            default_register_payable(),
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable::default_with_denom("nothash"),
         )
         .unwrap_err();
         match failure {
@@ -438,12 +483,14 @@ mod tests {
     #[test]
     fn test_register_no_funds_provided_and_fee_charge_non_zero() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[]),
-            default_register_payable(),
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable {
+                info: mock_info(DEFAULT_INFO_NAME, &[]),
+                ..Default::default()
+            },
         )
         .unwrap_err();
         match failure {
@@ -460,15 +507,11 @@ mod tests {
     #[test]
     fn test_register_insufficient_funds_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(99, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable::default_with_amount(99),
         )
         .unwrap_err();
         match failure {
@@ -489,16 +532,13 @@ mod tests {
     #[test]
     fn test_register_scope_not_found() {
         let mut deps = mock_dependencies(&[]);
+        // Skip registering a fake scope, causing the contract to fail to find one. Using test_instantiate
+        // instead of setup_test_suite will skip mocking a targeted scope
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        // Skip registering a fake scope, causing the contract to fail to find one
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
+        let failure = test_register_payable(
+            &mut deps,
+            &MockProvenanceUtil::new(),
+            TestRegisterPayable::default(),
         )
         .unwrap_err();
         match failure {
@@ -517,14 +557,10 @@ mod tests {
         // Register a scope with a different owner than the sender to simulate the situation
         deps.querier
             .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, "another-guy"));
-        let _failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
+        let _failure = test_register_payable(
+            &mut deps,
+            &MockProvenanceUtil::new(),
+            TestRegisterPayable::default(),
         )
         .unwrap_err();
         assert!(

@@ -12,6 +12,7 @@
         "register_payable": {
           "type": "object",
           "required": [
+            "oracle_address",
             "payable_denom",
             "payable_total",
             "payable_type",
@@ -19,6 +20,9 @@
             "scope_id"
           ],
           "properties": {
+            "oracle_address": {
+              "type": "string"
+            },
             "payable_denom": {
               "type": "string"
             },
@@ -75,6 +79,18 @@
               "type": "string"
             }
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "migrate_to_scope_addresses"
+      ],
+      "properties": {
+        "migrate_to_scope_addresses": {
+          "type": "object"
         }
       },
       "additionalProperties": false

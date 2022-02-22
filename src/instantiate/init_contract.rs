@@ -1,10 +1,14 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
-use crate::core::state::{config, State};
+use crate::core::state::{config_v2, StateV2};
 use crate::migrate::version_info::migrate_version_info;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
 
+/// Standard entrypoint for contract -> instantiate.  Generates the initial StateV2 value that
+/// drives and controls various configurations, and automatically binds the contract name to its
+/// address, ensuring that it and it alone has access to its spawned attributes on the registered
+/// payables' scopes.  Also establishes the initial version info storage.
 pub fn init_contract(
     deps: DepsMut<ProvenanceQuery>,
     env: Env,
@@ -13,12 +17,11 @@ pub fn init_contract(
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     // Ensure no funds were sent with the message
     if !info.funds.is_empty() {
-        return ContractError::std_err("purchase funds are not allowed to be sent during init");
+        return ContractError::std_err("purchase funds are not allowed to be sent during init")
+            .to_result();
     }
-
     // Create and save contract config state. The name is used for setting attributes on user accounts
-    config(deps.storage).save(&State {
-        payable_type: msg.payable_type.clone(),
+    config_v2(deps.storage).save(&StateV2 {
         contract_name: msg.contract_name.clone(),
         onboarding_cost: Uint128::new(msg.onboarding_cost.parse::<u128>().unwrap()),
         onboarding_denom: msg.onboarding_denom.clone(),
@@ -26,21 +29,17 @@ pub fn init_contract(
             .api
             .addr_validate(msg.fee_collection_address.as_str())?,
         fee_percent: msg.fee_percent,
-        oracle_address: deps.api.addr_validate(msg.oracle_address.as_str())?,
         // Always default to non-local if the value is not provided
         is_local: msg.is_local.unwrap_or(false),
     })?;
-
     // Create a message that will bind a restricted name to the contract address.
     let bind_name_msg = bind_name(
         &msg.contract_name,
         env.contract.address,
         NameBinding::Restricted,
     )?;
-
     // Set the version info to the default contract values on instantiation
     migrate_version_info(deps.storage)?;
-
     // Dispatch messages and emit event attributes
     Ok(Response::new()
         .add_message(bind_name_msg)
@@ -50,6 +49,7 @@ pub fn init_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::state::config_read_v2;
     use crate::migrate::version_info::{get_version_info, CONTRACT_NAME, CONTRACT_VERSION};
     use crate::testutil::test_utilities::{test_instantiate, InstArgs, DEFAULT_ONBOARDING_DENOM};
     use cosmwasm_std::testing::mock_info;
@@ -71,7 +71,6 @@ mod tests {
                 onboarding_denom: "usdf".into(),
                 fee_collection_address: "test-address".into(),
                 fee_percent: Decimal::percent(50),
-                oracle_address: "oracle".into(),
                 ..Default::default()
             },
         )
@@ -89,7 +88,7 @@ mod tests {
             },
             _ => panic!("unexpected cosmos message"),
         }
-        let generated_state = config(deps.as_mut().storage).load().unwrap();
+        let generated_state = config_read_v2(deps.as_ref().storage).load().unwrap();
         assert_eq!(
             "payables.asset",
             generated_state.contract_name.as_str(),
@@ -114,11 +113,6 @@ mod tests {
             Decimal::percent(50),
             generated_state.fee_percent,
             "expected state to include the proper fee percent",
-        );
-        assert_eq!(
-            "oracle",
-            generated_state.oracle_address.as_str(),
-            "expected state to include the proper oracle address",
         );
         let version_info = get_version_info(deps.as_ref().storage).unwrap();
         assert_eq!(

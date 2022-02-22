@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "State",
-  "description": "Fields that comprise the smart contract state",
+  "title": "StateV2",
+  "description": "Stores all relevant data about the contract. Modifiable only partially by migrations",
   "type": "object",
   "required": [
     "contract_name",
@@ -9,9 +9,7 @@
     "fee_percent",
     "is_local",
     "onboarding_cost",
-    "onboarding_denom",
-    "oracle_address",
-    "payable_type"
+    "onboarding_denom"
   ],
   "properties": {
     "contract_name": {
@@ -30,12 +28,6 @@
       "$ref": "#/definitions/Uint128"
     },
     "onboarding_denom": {
-      "type": "string"
-    },
-    "oracle_address": {
-      "$ref": "#/definitions/Addr"
-    },
-    "payable_type": {
       "type": "string"
     }
   },

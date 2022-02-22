@@ -18,10 +18,30 @@
     {
       "type": "object",
       "required": [
-        "query_payable"
+        "query_payable_by_scope_id"
       ],
       "properties": {
-        "query_payable": {
+        "query_payable_by_scope_id": {
+          "type": "object",
+          "required": [
+            "scope_id"
+          ],
+          "properties": {
+            "scope_id": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "query_payable_by_uuid"
+      ],
+      "properties": {
+        "query_payable_by_uuid": {
           "type": "object",
           "required": [
             "payable_uuid"

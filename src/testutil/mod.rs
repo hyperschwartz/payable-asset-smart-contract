@@ -1,2 +1,10 @@
 #[cfg(feature = "enable-test-utils")]
+pub mod make_payment_helpers;
+#[cfg(feature = "enable-test-utils")]
+pub mod mock_provenance_util;
+#[cfg(feature = "enable-test-utils")]
+pub mod oracle_approval_helpers;
+#[cfg(feature = "enable-test-utils")]
+pub mod register_payable_helpers;
+#[cfg(feature = "enable-test-utils")]
 pub mod test_utilities;

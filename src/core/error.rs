@@ -16,6 +16,9 @@ pub enum ContractError {
     #[error("Payable with uuid {payable_uuid} has already been approved")]
     DuplicateApproval { payable_uuid: String },
 
+    #[error("Scope with id {scope_id} has already been registered")]
+    DuplicateRegistration { scope_id: String },
+
     #[error("Funds were provided for an operation that does not require them")]
     FundsPresent,
 
@@ -48,10 +51,19 @@ pub enum ContractError {
         invalid_denoms: Vec<String>,
     },
 
+    #[error("Invalid migration: {0}")]
+    InvalidMigration(String),
+
     #[error("Payable {payable_uuid} was invalid: {invalid_reason}")]
     InvalidPayable {
         payable_uuid: String,
         invalid_reason: String,
+    },
+
+    #[error("Expected only a single payable attribute on scope {scope_id}, but found {attribute_amount}")]
+    InvalidScopeAttribute {
+        scope_id: String,
+        attribute_amount: usize,
     },
 
     #[error("No funds of type {valid_denom} were provided")]
@@ -85,8 +97,8 @@ impl ContractError {
         Err(self)
     }
     /// A simple abstraction to wrap an error response just by passing the message
-    pub fn std_err<T>(msg: impl Into<String>) -> Result<T, ContractError> {
-        Err(ContractError::Std(StdError::generic_err(msg)))
+    pub fn std_err(msg: impl Into<String>) -> ContractError {
+        ContractError::Std(StdError::generic_err(msg))
     }
     /// Helper to map a Vec<&str> into an InvalidFields enum
     pub fn invalid_fields(fields: Vec<&str>) -> ContractError {

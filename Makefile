@@ -11,7 +11,7 @@ build:
 
 .PHONY: test
 test:
-	@RUST_BACKTRACE=1 cargo unit-test --features=enable-test-utils
+	@RUST_BACKTRACE=1 cargo unit-test
 
 .PHONY: lint
 lint:

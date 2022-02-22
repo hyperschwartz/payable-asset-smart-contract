@@ -1,44 +1,64 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, payable_meta_storage};
+use crate::core::state::config_read_v2;
+use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
 use crate::util::constants::{
-    PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY,
-    TOTAL_REMAINING_KEY,
+    ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY,
+    PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
 };
-use crate::util::provenance_utils::get_scope_by_id;
+use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
 use cosmwasm_std::{coin, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 
+/// Contains all relevant fields required in order to make a payment for a payable.
 pub struct MakePaymentV1 {
     pub payable_uuid: String,
 }
 
+/// Parent function path for the contract to register a payable.  Ensures that the ProvenanceUtilImpl
+/// is the implementation used for this functionality outside of tests.
 pub fn make_payment(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
     make_payment: MakePaymentV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let mut payables_bucket = payable_meta_storage(deps.storage);
-    let mut target_payable = match payables_bucket.load(make_payment.payable_uuid.as_bytes()) {
-        Ok(meta) => {
-            if !meta.oracle_approved {
-                return Err(ContractError::NotReadyForPayment {
-                    payable_uuid: meta.payable_uuid,
-                    not_ready_reason: "Payable missing oracle approval".into(),
+    make_payment_with_util(deps, &ProvenanceUtilImpl, info, make_payment)
+}
+
+/// Makes a payment on a registered payable with the following steps:
+/// - Verifies that the oracle has approved for the payable.
+/// - Verifies that the payable has been registered with the contract.
+/// - Verifies that all funds provided are in the denomination required by the payable.
+/// - Verifies that the funds provided are <= payable total owed, but > 0.
+/// - Subtracts the payment amount from the total amount owed on the scope attribute.
+/// - Sends the amount of funds provided to the value owner of the payable's scope.
+pub fn make_payment_with_util<T: ProvenanceUtil>(
+    deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
+    info: MessageInfo,
+    make_payment: MakePaymentV1,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    let mut scope_attribute =
+        match query_payable_attribute_by_uuid(&deps.as_ref(), &make_payment.payable_uuid) {
+            Ok(attr) => {
+                if !attr.oracle_approved {
+                    return Err(ContractError::NotReadyForPayment {
+                        payable_uuid: attr.payable_uuid,
+                        not_ready_reason: "Payable missing oracle approval".into(),
+                    });
+                }
+                attr
+            }
+            Err(_) => {
+                return Err(ContractError::PayableNotFound {
+                    payable_uuid: make_payment.payable_uuid,
                 });
             }
-            meta
-        }
-        Err(_) => {
-            return Err(ContractError::PayableNotFound {
-                payable_uuid: make_payment.payable_uuid,
-            });
-        }
-    };
+        };
     let invalid_funds = info
         .funds
         .iter()
         .filter_map(|coin| {
-            if coin.denom != target_payable.payable_denom {
+            if coin.denom != scope_attribute.payable_denom {
                 Some(coin.denom.clone())
             } else {
                 None
@@ -47,7 +67,7 @@ pub fn make_payment(
         .collect::<Vec<String>>();
     if !invalid_funds.is_empty() {
         return Err(ContractError::InvalidFundsProvided {
-            valid_denom: target_payable.payable_denom,
+            valid_denom: scope_attribute.payable_denom,
             invalid_denoms: invalid_funds,
         });
     }
@@ -61,105 +81,84 @@ pub fn make_payment(
     // function executes.
     if payment_amount == 0 {
         return Err(ContractError::NoFundsProvided {
-            valid_denom: target_payable.payable_denom,
+            valid_denom: scope_attribute.payable_denom,
         });
     }
-    if payment_amount > target_payable.payable_remaining_owed.u128() {
+    if payment_amount > scope_attribute.payable_remaining_owed.u128() {
         return Err(ContractError::PaymentTooLarge {
-            total_owed: target_payable.payable_remaining_owed.u128(),
+            total_owed: scope_attribute.payable_remaining_owed.u128(),
             amount_provided: payment_amount,
         });
     }
-
-    let scope = get_scope_by_id(&deps.querier, target_payable.scope_id.as_str())?;
+    let scope = provenance_util.get_scope_by_id(&deps.querier, &scope_attribute.scope_id)?;
     let payee = scope.value_owner_address;
     let payment_message = CosmosMsg::Bank(BankMsg::Send {
         to_address: payee.to_string(),
-        amount: vec![coin(payment_amount, &target_payable.payable_denom)],
+        amount: vec![coin(payment_amount, &scope_attribute.payable_denom)],
     });
     // Subtract payment amount from tracked total
-    target_payable.payable_remaining_owed =
-        (target_payable.payable_remaining_owed.u128() - payment_amount).into();
-    payables_bucket.save(target_payable.payable_uuid.as_bytes(), &target_payable)?;
-    // Load state to derive payable type
-    let state = config(deps.storage).load()?;
+    scope_attribute.payable_remaining_owed =
+        (scope_attribute.payable_remaining_owed.u128() - payment_amount).into();
+    // Load state to derive payable type and contract name
+    let state = config_read_v2(deps.storage).load()?;
+    let upsert_attribute_msgs =
+        provenance_util.upsert_attribute_to_scope(&scope_attribute, &state.contract_name)?;
     Ok(Response::new()
         .add_message(payment_message)
-        .add_attribute(PAYMENT_MADE_KEY, &target_payable.payable_uuid)
-        .add_attribute(PAYABLE_TYPE_KEY, state.payable_type)
-        .add_attribute(PAYABLE_UUID_KEY, target_payable.payable_uuid)
+        .add_messages(upsert_attribute_msgs.to_vec())
+        .add_attribute(PAYMENT_MADE_KEY, &scope_attribute.payable_uuid)
+        .add_attribute(PAYABLE_TYPE_KEY, &scope_attribute.payable_type)
+        .add_attribute(PAYABLE_UUID_KEY, &scope_attribute.payable_uuid)
+        .add_attribute(ORACLE_ADDRESS_KEY, &scope_attribute.oracle_address)
         .add_attribute(PAYMENT_AMOUNT_KEY, payment_amount.to_string())
-        .add_attribute(TOTAL_REMAINING_KEY, target_payable.payable_remaining_owed)
+        .add_attribute(TOTAL_REMAINING_KEY, scope_attribute.payable_remaining_owed)
         .add_attribute(PAYER_KEY, &info.sender.to_string())
         .add_attribute(PAYEE_KEY, payee.as_str()))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::contract::{execute, query};
+    use crate::contract::query;
     use crate::core::error::ContractError;
-    use crate::core::msg::{ExecuteMsg, QueryMsg};
-    use crate::core::state::PayableMeta;
+    use crate::core::msg::QueryMsg;
+    use crate::core::state::PayableScopeAttribute;
+    use crate::testutil::make_payment_helpers::{test_make_payment, TestMakePayment};
+    use crate::testutil::oracle_approval_helpers::{test_oracle_approval, TestOracleApproval};
+    use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
     use crate::testutil::test_utilities::{
-        default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate,
-        InstArgs, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS,
-        DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID,
-        DEFAULT_SCOPE_ID,
+        setup_test_suite, single_attribute_for_key, InstArgs, DEFAULT_CONTRACT_NAME,
+        DEFAULT_INFO_NAME, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL,
+        DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
     };
     use crate::util::constants::{
-        PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY,
-        PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
+        ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY,
+        PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
     };
     use cosmwasm_std::testing::{mock_env, mock_info};
-    use cosmwasm_std::{coin, from_binary, BankMsg, CosmosMsg};
+    use cosmwasm_std::{from_binary, BankMsg, CosmosMsg};
     use provwasm_mocks::mock_dependencies;
+    use provwasm_std::{
+        AttributeMsgParams, AttributeValueType, ProvenanceMsg, ProvenanceMsgParams,
+    };
 
     #[test]
     fn test_execute_make_payment_paid_in_full() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        provenance_util.bind_captured_attribute(&mut deps);
+        let payment_response = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_sender("payer-guy"),
         )
         .unwrap();
-        let payment_response = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                "payer-guy",
-                &[coin(DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_DENOM)],
-            ),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
+        provenance_util.bind_captured_attribute(&mut deps);
         assert_eq!(
-            1,
-            payment_response.messages.len(),
-            "one message should be added: the payment to the owner of the payable"
-        );
-        assert_eq!(
-            7,
+            8,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -177,6 +176,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&payment_response, PAYABLE_UUID_KEY),
             "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&payment_response, ORACLE_ADDRESS_KEY),
+            "expected the oracle address key to be added to the response",
         );
         assert_eq!(
             DEFAULT_PAYABLE_TOTAL.to_string(),
@@ -197,6 +201,11 @@ mod tests {
             DEFAULT_INFO_NAME,
             single_attribute_for_key(&payment_response, PAYEE_KEY),
             "expected the payee to the be the default info name, as that was used to create the scope",
+        );
+        assert_eq!(
+            3,
+            payment_response.messages.len(),
+            "three messages should be added: the payment to the owner of the payable, a delete attributes message, and an add attribute message",
         );
         payment_response
             .messages
@@ -224,25 +233,60 @@ mod tests {
                         "the denom of the payment should match the payable"
                     );
                 }
+                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name,
+                        value,
+                        value_type,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    }
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
+                        address,
+                        name,
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_SCOPE_ID,
+                            address.as_str(),
+                            "the delete attribute should target the scope",
+                        );
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the delete attribute should target the contract's name",
+                        );
+                    }
+                    _ => panic!("unexpected custom message encountered during make payment"),
+                },
                 _ => panic!("unexpected message sent during payment"),
             });
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
-        let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
+        let scope_attribute = from_binary::<PayableScopeAttribute>(&payable_binary).unwrap();
         assert_eq!(
             DEFAULT_PAYABLE_TOTAL,
-            payable_meta.payable_total_owed.u128(),
+            scope_attribute.payable_total_owed.u128(),
             "the total owed should remain unchanged by the payment"
         );
         assert_eq!(
             0u128,
-            payable_meta.payable_remaining_owed.u128(),
+            scope_attribute.payable_remaining_owed.u128(),
             "the remaining owed should be reduced to zero after the successful payment"
         );
     }
@@ -250,45 +294,23 @@ mod tests {
     #[test]
     fn test_execute_make_payment_pay_less_than_all() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
-        let payment_response = execute(
-            deps.as_mut(),
-            mock_env(),
-            // Pay 100 less than the total required for pay off
-            mock_info(
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        let payment_response = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_full_sender(
                 "payer-guy",
-                &[coin(DEFAULT_PAYABLE_TOTAL - 100, DEFAULT_PAYABLE_DENOM)],
+                DEFAULT_PAYABLE_TOTAL - 100,
+                DEFAULT_PAYABLE_DENOM,
             ),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
         )
         .unwrap();
         assert_eq!(
-            7,
+            8,
             payment_response.attributes.len(),
             "expected all attributes to be added to the response"
         );
@@ -306,6 +328,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&payment_response, PAYABLE_UUID_KEY),
             "expected the payable uuid key to be added to the response",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&payment_response, ORACLE_ADDRESS_KEY),
+            "expected the oracle address key to be added to the response",
         );
         assert_eq!(
             (DEFAULT_PAYABLE_TOTAL - 100).to_string(),
@@ -328,9 +355,9 @@ mod tests {
             "expected the payee to the be the default info name, as that was used to create the scope",
         );
         assert_eq!(
-            1,
+            3,
             payment_response.messages.len(),
-            "one message should be added: the payment to the owner of the payable"
+            "three messages should be added: the payment to the owner of the payable, a delete attributes message, and an add attribute message"
         );
         payment_response
             .messages
@@ -358,55 +385,87 @@ mod tests {
                         "the denom of the payment should match the payable"
                     );
                 }
+                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name,
+                        value,
+                        value_type,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    }
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
+                        address,
+                        name,
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_SCOPE_ID,
+                            address.as_str(),
+                            "the delete attribute should target the scope",
+                        );
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the delete attribute should target the contract's name",
+                        );
+                    }
+                    _ => panic!("unexpected custom message encountered during make payment"),
+                },
                 _ => panic!("unexpected message sent during payment"),
             });
         let payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
-        let payable_meta = from_binary::<PayableMeta>(&payable_binary).unwrap();
+        let scope_attribute = from_binary::<PayableScopeAttribute>(&payable_binary).unwrap();
         assert_eq!(
             DEFAULT_PAYABLE_TOTAL,
-            payable_meta.payable_total_owed.u128(),
+            scope_attribute.payable_total_owed.u128(),
             "the total owed should remain unchanged by the payment"
         );
         assert_eq!(
             100u128,
-            payable_meta.payable_remaining_owed.u128(),
+            scope_attribute.payable_remaining_owed.u128(),
             "the remaining owed should be reduced to 100 after the successful payment"
         );
         // Pay subsequently to watch the values be reduced
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("payer-guy", &[coin(100, DEFAULT_PAYABLE_DENOM)]),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
+        test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_full_sender("payer-guy", 100, DEFAULT_PAYABLE_DENOM),
         )
         .unwrap();
         let subsequent_payable_binary = query(
             deps.as_ref(),
             mock_env(),
-            QueryMsg::QueryPayable {
+            QueryMsg::QueryPayableByUuid {
                 payable_uuid: DEFAULT_PAYABLE_UUID.to_string(),
             },
         )
         .unwrap();
-        let subsequent_payable_meta =
-            from_binary::<PayableMeta>(&subsequent_payable_binary).unwrap();
+        let paid_scope_attribute =
+            from_binary::<PayableScopeAttribute>(&subsequent_payable_binary).unwrap();
         assert_eq!(
             DEFAULT_PAYABLE_TOTAL,
-            subsequent_payable_meta.payable_total_owed.u128(),
+            paid_scope_attribute.payable_total_owed.u128(),
             "the total owed should remain unchanged by the subsequent payment"
         );
         assert_eq!(
             0u128,
-            subsequent_payable_meta.payable_remaining_owed.u128(),
+            paid_scope_attribute.payable_remaining_owed.u128(),
             "the remaining owed should now be reduced to zero after the subsequent payment"
         );
     }
@@ -414,20 +473,10 @@ mod tests {
     #[test]
     fn test_execute_make_payment_missing_payable_uuid() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // No need to do anything upfront because we're going to target a non-existent payable
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                "payer-guy",
-                &[coin(DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_DENOM)],
-            ),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap_err();
+        let failure =
+            test_make_payment(&mut deps, &provenance_util, TestMakePayment::default()).unwrap_err();
         match failure {
             ContractError::PayableNotFound { payable_uuid } => {
                 assert_eq!(
@@ -443,37 +492,16 @@ mod tests {
     #[test]
     fn test_execute_make_payment_invalid_coin_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
-        // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        // Register the default payable
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("payer-guy", &[coin(DEFAULT_PAYABLE_TOTAL, "fakecoin")]),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        // Wrong coin
+        let failure = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_denom("fakecoin"),
         )
         .unwrap_err();
         match failure {
@@ -505,36 +533,17 @@ mod tests {
     #[test]
     fn test_execute_make_payment_no_funds_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("payer-guy", &[]),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        let failure = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment {
+                info: mock_info("payer-guy", &[]),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -553,37 +562,15 @@ mod tests {
     #[test]
     fn test_execute_make_payment_zero_coin_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("payer-guy", &[coin(0, DEFAULT_PAYABLE_DENOM)]),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        let failure = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_amount(0),
         )
         .unwrap_err();
         match failure {
@@ -601,40 +588,15 @@ mod tests {
     #[test]
     fn test_execute_make_payment_too_many_funds_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // Register the default payable for payment
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         // Mark the oracle as approved
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_ORACLE_ADDRESS, &[]),
-            ExecuteMsg::OracleApproval {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
-        )
-        .unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                "payer-guy",
-                &[coin(DEFAULT_PAYABLE_TOTAL + 1, DEFAULT_PAYABLE_DENOM)],
-            ),
-            ExecuteMsg::MakePayment {
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-            },
+        test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
+        let failure = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_amount(DEFAULT_PAYABLE_TOTAL + 1),
         )
         .unwrap_err();
         match failure {
