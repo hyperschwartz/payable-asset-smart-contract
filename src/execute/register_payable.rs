@@ -201,38 +201,27 @@ fn validate_fee_params_get_messages(
 
 #[cfg(test)]
 mod tests {
-    use crate::contract::execute;
     use crate::core::error::ContractError;
     use crate::core::error::ContractError::Std;
-    use crate::core::msg::ExecuteMsg;
-    use crate::testutil::test_utilities::{default_register_payable, get_duped_scope, single_attribute_for_key, test_instantiate, InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, DEFAULT_ORACLE_ADDRESS};
-    use crate::util::constants::{
-        ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY,
-        REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY,
-    };
-    use cosmwasm_std::testing::{mock_env, mock_info};
+    use crate::testutil::test_utilities::{ get_duped_scope, single_attribute_for_key, test_instantiate, InstArgs, DEFAULT_FEE_COLLECTION_ADDRESS, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, DEFAULT_ORACLE_ADDRESS, setup_test_suite, DEFAULT_CONTRACT_NAME};
+    use crate::util::constants::{ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY};
+    use cosmwasm_std::testing::{mock_info};
     use cosmwasm_std::StdError::GenericErr;
-    use cosmwasm_std::{coin, BankMsg, CosmosMsg, Uint128};
+    use cosmwasm_std::{BankMsg, CosmosMsg, from_binary};
     use provwasm_mocks::mock_dependencies;
+    use provwasm_std::{AttributeMsgParams, AttributeValueType, ProvenanceMsg, ProvenanceMsgParams};
+    use crate::core::state::PayableScopeAttribute;
+    use crate::testutil::mock_provenance_util::MockProvenanceUtil;
+    use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
 
     #[test]
     fn test_register_valid_no_refund() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
-        let response = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        // The default message will register a payable with the exact amount required for no refund
+        let response = test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
         assert_eq!(
-            7,
+            8,
             response.attributes.len(),
             "expected all registration attributes to be recorded"
         );
@@ -250,6 +239,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&response, PAYABLE_UUID_KEY),
             "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&response, ORACLE_ADDRESS_KEY),
+            "the ORACLE_ADDRESS_KEY value should equate to the oracle's address",
         );
         assert_eq!(
             DEFAULT_SCOPE_ID,
@@ -272,7 +266,7 @@ mod tests {
             "the oracle funds kept should equal to total amount sent (100) - total amount sent * fee percent (75%)"
         );
         assert_eq!(
-            1,
+            2,
             response.messages.len(),
             "one message expected during registration: a fee charge",
         );
@@ -284,6 +278,27 @@ mod tests {
                 assert_eq!(75, coin.amount.u128(), "expected the fee charged to be equal to 75, because the onboarding cost is 100 and the fee percent is 75%");
                 assert_eq!(DEFAULT_ONBOARDING_DENOM, coin.denom.as_str(), "expected the fee's denomination to equate to the contract's specified denomination");
             },
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                                                       name, value, value_type, ..
+                                                   }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    },
+                    _ => panic!("unexpected provenance msg params"),
+                }
+            },
             _ => panic!("unexpected response message type"),
         });
     }
@@ -291,21 +306,14 @@ mod tests {
     #[test]
     fn test_register_valid_with_refund() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        deps.querier
-            .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, DEFAULT_INFO_NAME));
-        let response = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(150, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let response = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable::default_with_amount(150),
+        ).unwrap();
         assert_eq!(
-            8,
+            9,
             response.attributes.len(),
             "expected all registration attributes to be recorded"
         );
@@ -323,6 +331,11 @@ mod tests {
             DEFAULT_PAYABLE_UUID,
             single_attribute_for_key(&response, PAYABLE_UUID_KEY),
             "the PAYABLE_UUID_KEY value should equate to the payable uuid",
+        );
+        assert_eq!(
+            DEFAULT_ORACLE_ADDRESS,
+            single_attribute_for_key(&response, ORACLE_ADDRESS_KEY),
+            "the ORACLE_ADDRESS_KEY value should equate to the oracle address",
         );
         assert_eq!(
             DEFAULT_SCOPE_ID,
@@ -350,7 +363,7 @@ mod tests {
             "the refund amount should equal the amount provided over the onboarding cost (150 - 100)",
         );
         assert_eq!(
-            2,
+            3,
             response.messages.len(),
             "two messages expected during registration: a fee charge and a fee refund",
         );
@@ -370,59 +383,40 @@ mod tests {
                     _ => panic!("unexpected address for bank message send"),
                 }
             },
+            CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
+                match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name, value, value_type, ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME,
+                            name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
+                    },
+                    _ => panic!("unexpected provenance msg params"),
+                }
+            },
             _ => panic!("unexpected response message type"),
         });
     }
 
     #[test]
-    fn test_register_invalid_payable_type() {
-        let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[coin(100, DEFAULT_ONBOARDING_DENOM)]),
-            ExecuteMsg::RegisterPayable {
-                payable_type: "wrong-payable-type".into(),
-                payable_uuid: DEFAULT_PAYABLE_UUID.into(),
-                scope_id: DEFAULT_SCOPE_ID.into(),
-                oracle_address: DEFAULT_ORACLE_ADDRESS.into(),
-                payable_denom: DEFAULT_PAYABLE_DENOM.into(),
-                payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
-            },
-        )
-        .unwrap_err();
-        match failure {
-            ContractError::InvalidPayable {
-                payable_uuid,
-                invalid_reason,
-            } => {
-                assert_eq!(
-                    DEFAULT_PAYABLE_UUID,
-                    payable_uuid.as_str(),
-                    "expected the attempted payable uuid to be input"
-                );
-                assert_eq!(
-                    "this contract accepts payables of type [invoice], but received type [wrong-payable-type]",
-                    invalid_reason,
-                    "expected the correct message to be added to the message",
-                );
-            }
-            _ => panic!("unexpected contract error encountered"),
-        };
-    }
-
-    #[test]
     fn test_register_invalid_fund_denom() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[coin(100, "nothash".to_string())]),
-            default_register_payable(),
-        )
-        .unwrap_err();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable::default_with_denom("nothash"),
+        ).unwrap_err();
         match failure {
             ContractError::InvalidFundsProvided {
                 valid_denom,
@@ -447,14 +441,15 @@ mod tests {
     #[test]
     fn test_register_no_funds_provided_and_fee_charge_non_zero() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(DEFAULT_INFO_NAME, &[]),
-            default_register_payable(),
-        )
-        .unwrap_err();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(
+            &mut deps,
+            &provenance_util,
+            TestRegisterPayable {
+                info: mock_info(DEFAULT_INFO_NAME, &[]),
+                ..Default::default()
+            }
+        ).unwrap_err();
         match failure {
             ContractError::NoFundsProvided { valid_denom } => {
                 assert_eq!(
@@ -469,17 +464,8 @@ mod tests {
     #[test]
     fn test_register_insufficient_funds_provided() {
         let mut deps = mock_dependencies(&[]);
-        test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(99, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap_err();
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        let failure = test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default_with_amount(99)).unwrap_err();
         match failure {
             ContractError::InsufficientFundsProvided {
                 amount_needed,
@@ -498,18 +484,10 @@ mod tests {
     #[test]
     fn test_register_scope_not_found() {
         let mut deps = mock_dependencies(&[]);
+        // Skip registering a fake scope, causing the contract to fail to find one. Using test_instantiate
+        // instead of setup_test_suite will skip mocking a targeted scope
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        // Skip registering a fake scope, causing the contract to fail to find one
-        let failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap_err();
+        let failure = test_register_payable(&mut deps, &MockProvenanceUtil::new(), TestRegisterPayable::default()).unwrap_err();
         match failure {
             Std(GenericErr { msg, .. }) => {
                 assert!(msg
@@ -526,16 +504,11 @@ mod tests {
         // Register a scope with a different owner than the sender to simulate the situation
         deps.querier
             .with_scope(get_duped_scope(DEFAULT_SCOPE_ID, "another-guy"));
-        let _failure = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(
-                DEFAULT_INFO_NAME,
-                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
-            ),
-            default_register_payable(),
-        )
-        .unwrap_err();
+        let _failure = test_register_payable(
+            &mut deps,
+            &MockProvenanceUtil::new(),
+            TestRegisterPayable::default()
+        ).unwrap_err();
         assert!(
             matches!(ContractError::Unauthorized, _failure),
             "the error should show that the sender is unauthorized to make this request"

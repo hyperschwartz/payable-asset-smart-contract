@@ -22,6 +22,29 @@ impl TestRegisterPayable {
             payable_total: Uint128::new(DEFAULT_PAYABLE_TOTAL),
         }
     }
+
+    pub fn default_full_sender(sender: &str, amount: u128, denom: &str) -> Self {
+        TestRegisterPayable {
+            info: mock_info(sender, &[coin(amount, denom)]),
+            ..Default::default()
+        }
+    }
+
+    pub fn default_with_coin(amount: u128, denom: &str) -> Self {
+        Self::default_full_sender(DEFAULT_INFO_NAME, amount, denom)
+    }
+
+    pub fn default_with_sender(sender: &str) -> Self {
+        Self::default_full_sender(sender, 100, DEFAULT_ONBOARDING_DENOM)
+    }
+
+    pub fn default_with_amount(amount: u128) -> Self {
+        Self::default_full_sender(DEFAULT_INFO_NAME, amount, DEFAULT_ONBOARDING_DENOM)
+    }
+
+    pub fn default_with_denom(denom: &str) -> Self {
+        Self::default_full_sender(DEFAULT_INFO_NAME, 100, denom)
+    }
 }
 impl Default for TestRegisterPayable {
     fn default() -> Self {
