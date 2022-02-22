@@ -1,10 +1,13 @@
-use cosmwasm_std::{coin, MessageInfo, Response};
-use cosmwasm_std::testing::mock_info;
-use provwasm_std::ProvenanceMsg;
 use crate::core::error::ContractError;
 use crate::execute::make_payment::{make_payment_with_util, MakePaymentV1};
 use crate::testutil::mock_provenance_util::MockProvenanceUtil;
-use crate::testutil::test_utilities::{DEFAULT_CONTRACT_NAME, DEFAULT_INFO_NAME, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_UUID, MockOwnedDeps};
+use crate::testutil::test_utilities::{
+    MockOwnedDeps, DEFAULT_CONTRACT_NAME, DEFAULT_INFO_NAME, DEFAULT_PAYABLE_DENOM,
+    DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_UUID,
+};
+use cosmwasm_std::testing::mock_info;
+use cosmwasm_std::{coin, MessageInfo, Response};
+use provwasm_std::ProvenanceMsg;
 
 pub struct TestMakePayment {
     pub info: MessageInfo,
@@ -39,7 +42,10 @@ impl TestMakePayment {
 impl Default for TestMakePayment {
     fn default() -> Self {
         TestMakePayment {
-            info: mock_info(DEFAULT_INFO_NAME, &[coin(DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_DENOM)]),
+            info: mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_DENOM)],
+            ),
             contract_name: DEFAULT_CONTRACT_NAME.to_string(),
             make_payment: TestMakePayment::default_make_payment(),
         }
@@ -51,7 +57,8 @@ pub fn test_make_payment(
     provenance_util: &MockProvenanceUtil,
     msg: TestMakePayment,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let response = make_payment_with_util(deps.as_mut(), provenance_util, msg.info, msg.make_payment);
+    let response =
+        make_payment_with_util(deps.as_mut(), provenance_util, msg.info, msg.make_payment);
     provenance_util.bind_captured_attribute_named(deps, msg.contract_name);
     response
 }

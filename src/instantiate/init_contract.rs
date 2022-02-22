@@ -1,6 +1,6 @@
 use crate::core::error::ContractError;
 use crate::core::msg::InitMsg;
-use crate::core::state::{config, config_v2, StateV2};
+use crate::core::state::{config_v2, StateV2};
 use crate::migrate::version_info::migrate_version_info;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
@@ -44,6 +44,7 @@ pub fn init_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::state::config_read_v2;
     use crate::migrate::version_info::{get_version_info, CONTRACT_NAME, CONTRACT_VERSION};
     use crate::testutil::test_utilities::{test_instantiate, InstArgs, DEFAULT_ONBOARDING_DENOM};
     use cosmwasm_std::testing::mock_info;
@@ -82,7 +83,7 @@ mod tests {
             },
             _ => panic!("unexpected cosmos message"),
         }
-        let generated_state = config(deps.as_mut().storage).load().unwrap();
+        let generated_state = config_read_v2(deps.as_ref().storage).load().unwrap();
         assert_eq!(
             "payables.asset",
             generated_state.contract_name.as_str(),
@@ -107,11 +108,6 @@ mod tests {
             Decimal::percent(50),
             generated_state.fee_percent,
             "expected state to include the proper fee percent",
-        );
-        assert_eq!(
-            "oracle",
-            generated_state.oracle_address.as_str(),
-            "expected state to include the proper oracle address",
         );
         let version_info = get_version_info(deps.as_ref().storage).unwrap();
         assert_eq!(

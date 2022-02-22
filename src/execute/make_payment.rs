@@ -1,10 +1,13 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config_read_v2};
-use crate::util::constants::{ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY};
+use crate::core::state::config_read_v2;
+use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
+use crate::util::constants::{
+    ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY,
+    PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
+};
 use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
 use cosmwasm_std::{coin, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
-use crate::query::query_payable_by_uuid::{query_payable_attribute_by_uuid};
 
 pub struct MakePaymentV1 {
     pub payable_uuid: String,
@@ -18,28 +21,29 @@ pub fn make_payment(
     make_payment_with_util(deps, &ProvenanceUtilImpl, info, make_payment)
 }
 
-pub fn make_payment_with_util<T : ProvenanceUtil>(
+pub fn make_payment_with_util<T: ProvenanceUtil>(
     deps: DepsMut<ProvenanceQuery>,
     provenance_util: &T,
     info: MessageInfo,
     make_payment: MakePaymentV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let mut scope_attribute = match query_payable_attribute_by_uuid(&deps.as_ref(), &make_payment.payable_uuid) {
-        Ok(attr) => {
-            if !attr.oracle_approved {
-                return Err(ContractError::NotReadyForPayment {
-                    payable_uuid: attr.payable_uuid,
-                    not_ready_reason: "Payable missing oracle approval".into(),
+    let mut scope_attribute =
+        match query_payable_attribute_by_uuid(&deps.as_ref(), &make_payment.payable_uuid) {
+            Ok(attr) => {
+                if !attr.oracle_approved {
+                    return Err(ContractError::NotReadyForPayment {
+                        payable_uuid: attr.payable_uuid,
+                        not_ready_reason: "Payable missing oracle approval".into(),
+                    });
+                }
+                attr
+            }
+            Err(_) => {
+                return Err(ContractError::PayableNotFound {
+                    payable_uuid: make_payment.payable_uuid,
                 });
             }
-            attr
-        }
-        Err(_) => {
-            return Err(ContractError::PayableNotFound {
-                payable_uuid: make_payment.payable_uuid,
-            });
-        }
-    };
+        };
     let invalid_funds = info
         .funds
         .iter()
@@ -87,10 +91,8 @@ pub fn make_payment_with_util<T : ProvenanceUtil>(
         (scope_attribute.payable_remaining_owed.u128() - payment_amount).into();
     // Load state to derive payable type and contract name
     let state = config_read_v2(deps.storage).load()?;
-    let upsert_attribute_msgs = provenance_util.upsert_attribute_to_scope(
-        &scope_attribute,
-        &state.contract_name,
-    )?;
+    let upsert_attribute_msgs =
+        provenance_util.upsert_attribute_to_scope(&scope_attribute, &state.contract_name)?;
     Ok(Response::new()
         .add_message(payment_message)
         .add_messages(upsert_attribute_msgs.to_vec())
@@ -106,19 +108,28 @@ pub fn make_payment_with_util<T : ProvenanceUtil>(
 
 #[cfg(test)]
 mod tests {
-    use crate::contract::{query};
+    use crate::contract::query;
     use crate::core::error::ContractError;
-    use crate::core::msg::{QueryMsg};
-    use crate::core::state::{PayableScopeAttribute};
-    use crate::testutil::test_utilities::{single_attribute_for_key, InstArgs, DEFAULT_INFO_NAME, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, setup_test_suite, DEFAULT_CONTRACT_NAME};
-    use crate::util::constants::{ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY, PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY};
+    use crate::core::msg::QueryMsg;
+    use crate::core::state::PayableScopeAttribute;
+    use crate::testutil::make_payment_helpers::{test_make_payment, TestMakePayment};
+    use crate::testutil::oracle_approval_helpers::{test_oracle_approval, TestOracleApproval};
+    use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
+    use crate::testutil::test_utilities::{
+        setup_test_suite, single_attribute_for_key, InstArgs, DEFAULT_CONTRACT_NAME,
+        DEFAULT_INFO_NAME, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL,
+        DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
+    };
+    use crate::util::constants::{
+        ORACLE_ADDRESS_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, PAYEE_KEY, PAYER_KEY,
+        PAYMENT_AMOUNT_KEY, PAYMENT_MADE_KEY, TOTAL_REMAINING_KEY,
+    };
     use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::{from_binary, BankMsg, CosmosMsg};
     use provwasm_mocks::mock_dependencies;
-    use provwasm_std::{AttributeMsgParams, AttributeValueType, ProvenanceMsg, ProvenanceMsgParams};
-    use crate::testutil::make_payment_helpers::{test_make_payment, TestMakePayment};
-    use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
-    use crate::testutil::oracle_approval_helpers::{test_oracle_approval, TestOracleApproval};
+    use provwasm_std::{
+        AttributeMsgParams, AttributeValueType, ProvenanceMsg, ProvenanceMsgParams,
+    };
 
     #[test]
     fn test_execute_make_payment_paid_in_full() {
@@ -129,7 +140,12 @@ mod tests {
         // Mark the oracle as approved
         test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
         provenance_util.bind_captured_attribute(&mut deps);
-        let payment_response = test_make_payment(&mut deps, &provenance_util, TestMakePayment::default_with_sender("payer-guy")).unwrap();
+        let payment_response = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_sender("payer-guy"),
+        )
+        .unwrap();
         provenance_util.bind_captured_attribute(&mut deps);
         assert_eq!(
             8,
@@ -206,45 +222,41 @@ mod tests {
                         payment_coin.denom.as_str(),
                         "the denom of the payment should match the payable"
                     );
-                },
-                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
-                    match params {
-                        ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
-                                                           name,
-                                                           value,
-                                                           value_type,
-                                                           ..
-                                                       }) => {
-                            assert_eq!(
-                                DEFAULT_CONTRACT_NAME,
-                                name,
-                                "the contract name should be the name of the added attribute",
-                            );
-                            assert_eq!(
-                                AttributeValueType::Json,
-                                value_type,
-                                "the attribute type added should be of the type Json",
-                            );
-                            let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
-                            provenance_util.assert_attribute_matches_latest(&attribute);
-                        },
-                        ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
-                                                           address,
-                                                           name,
-                                                       }) => {
-                            assert_eq!(
-                                DEFAULT_SCOPE_ID,
-                                address.as_str(),
-                                "the delete attribute should target the scope",
-                            );
-                            assert_eq!(
-                                DEFAULT_CONTRACT_NAME,
-                                name,
-                                "the delete attribute should target the contract's name",
-                            );
-                        },
-                        _ => panic!("unexpected custom message encountered during make payment"),
+                }
+                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name,
+                        value,
+                        value_type,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
                     }
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
+                        address,
+                        name,
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_SCOPE_ID,
+                            address.as_str(),
+                            "the delete attribute should target the scope",
+                        );
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the delete attribute should target the contract's name",
+                        );
+                    }
+                    _ => panic!("unexpected custom message encountered during make payment"),
                 },
                 _ => panic!("unexpected message sent during payment"),
             });
@@ -280,8 +292,13 @@ mod tests {
         let payment_response = test_make_payment(
             &mut deps,
             &provenance_util,
-            TestMakePayment::default_full_sender("payer-guy", DEFAULT_PAYABLE_TOTAL - 100, DEFAULT_PAYABLE_DENOM),
-        ).unwrap();
+            TestMakePayment::default_full_sender(
+                "payer-guy",
+                DEFAULT_PAYABLE_TOTAL - 100,
+                DEFAULT_PAYABLE_DENOM,
+            ),
+        )
+        .unwrap();
         assert_eq!(
             8,
             payment_response.attributes.len(),
@@ -357,45 +374,41 @@ mod tests {
                         payment_coin.denom.as_str(),
                         "the denom of the payment should match the payable"
                     );
-                },
-                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => {
-                    match params {
-                        ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
-                                                           name,
-                                                           value,
-                                                           value_type,
-                                                           ..
-                                                       }) => {
-                            assert_eq!(
-                                DEFAULT_CONTRACT_NAME,
-                                name,
-                                "the contract name should be the name of the added attribute",
-                            );
-                            assert_eq!(
-                                AttributeValueType::Json,
-                                value_type,
-                                "the attribute type added should be of the type Json",
-                            );
-                            let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
-                            provenance_util.assert_attribute_matches_latest(&attribute);
-                        },
-                        ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
-                                                           address,
-                                                           name,
-                                                       }) => {
-                            assert_eq!(
-                                DEFAULT_SCOPE_ID,
-                                address.as_str(),
-                                "the delete attribute should target the scope",
-                            );
-                            assert_eq!(
-                                DEFAULT_CONTRACT_NAME,
-                                name,
-                                "the delete attribute should target the contract's name",
-                            );
-                        },
-                        _ => panic!("unexpected custom message encountered during make payment"),
+                }
+                CosmosMsg::Custom(ProvenanceMsg { params, .. }) => match params {
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::AddAttribute {
+                        name,
+                        value,
+                        value_type,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the contract name should be the name of the added attribute",
+                        );
+                        assert_eq!(
+                            AttributeValueType::Json,
+                            value_type,
+                            "the attribute type added should be of the type Json",
+                        );
+                        let attribute = from_binary::<PayableScopeAttribute>(&value).unwrap();
+                        provenance_util.assert_attribute_matches_latest(&attribute);
                     }
+                    ProvenanceMsgParams::Attribute(AttributeMsgParams::DeleteAttribute {
+                        address,
+                        name,
+                    }) => {
+                        assert_eq!(
+                            DEFAULT_SCOPE_ID,
+                            address.as_str(),
+                            "the delete attribute should target the scope",
+                        );
+                        assert_eq!(
+                            DEFAULT_CONTRACT_NAME, name,
+                            "the delete attribute should target the contract's name",
+                        );
+                    }
+                    _ => panic!("unexpected custom message encountered during make payment"),
                 },
                 _ => panic!("unexpected message sent during payment"),
             });
@@ -423,7 +436,8 @@ mod tests {
             &mut deps,
             &provenance_util,
             TestMakePayment::default_full_sender("payer-guy", 100, DEFAULT_PAYABLE_DENOM),
-        ).unwrap();
+        )
+        .unwrap();
         let subsequent_payable_binary = query(
             deps.as_ref(),
             mock_env(),
@@ -451,7 +465,8 @@ mod tests {
         let mut deps = mock_dependencies(&[]);
         let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
         // No need to do anything upfront because we're going to target a non-existent payable
-        let failure = test_make_payment(&mut deps, &provenance_util, TestMakePayment::default()).unwrap_err();
+        let failure =
+            test_make_payment(&mut deps, &provenance_util, TestMakePayment::default()).unwrap_err();
         match failure {
             ContractError::PayableNotFound { payable_uuid } => {
                 assert_eq!(
@@ -473,7 +488,12 @@ mod tests {
         // Mark the oracle as approved
         test_oracle_approval(&mut deps, &provenance_util, TestOracleApproval::default()).unwrap();
         // Wrong coin
-        let failure = test_make_payment(&mut deps, &provenance_util, TestMakePayment::default_with_denom("fakecoin")).unwrap_err();
+        let failure = test_make_payment(
+            &mut deps,
+            &provenance_util,
+            TestMakePayment::default_with_denom("fakecoin"),
+        )
+        .unwrap_err();
         match failure {
             ContractError::InvalidFundsProvided {
                 valid_denom,
@@ -514,8 +534,9 @@ mod tests {
             TestMakePayment {
                 info: mock_info("payer-guy", &[]),
                 ..Default::default()
-            }
-        ).unwrap_err();
+            },
+        )
+        .unwrap_err();
         match failure {
             ContractError::NoFundsProvided { valid_denom } => {
                 assert_eq!(
@@ -540,7 +561,8 @@ mod tests {
             &mut deps,
             &provenance_util,
             TestMakePayment::default_with_amount(0),
-        ).unwrap_err();
+        )
+        .unwrap_err();
         match failure {
             ContractError::NoFundsProvided { valid_denom } => {
                 assert_eq!(
@@ -565,7 +587,8 @@ mod tests {
             &mut deps,
             &provenance_util,
             TestMakePayment::default_with_amount(DEFAULT_PAYABLE_TOTAL + 1),
-        ).unwrap_err();
+        )
+        .unwrap_err();
         match failure {
             ContractError::PaymentTooLarge {
                 total_owed,

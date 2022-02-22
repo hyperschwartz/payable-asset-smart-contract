@@ -1,5 +1,5 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config_read_v2};
+use crate::core::state::config_read_v2;
 use cosmwasm_std::{to_binary, Binary, Deps};
 use provwasm_std::ProvenanceQuery;
 

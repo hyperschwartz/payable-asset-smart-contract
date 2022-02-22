@@ -1,10 +1,14 @@
-use cosmwasm_std::{coin, MessageInfo, Response, Uint128};
-use cosmwasm_std::testing::mock_info;
-use provwasm_std::{ProvenanceMsg};
 use crate::core::error::ContractError;
 use crate::execute::register_payable::{register_payable_with_util, RegisterPayableV2};
 use crate::testutil::mock_provenance_util::MockProvenanceUtil;
-use crate::testutil::test_utilities::{DEFAULT_CONTRACT_NAME, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, MockOwnedDeps};
+use crate::testutil::test_utilities::{
+    MockOwnedDeps, DEFAULT_CONTRACT_NAME, DEFAULT_INFO_NAME, DEFAULT_ONBOARDING_DENOM,
+    DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE,
+    DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
+};
+use cosmwasm_std::testing::mock_info;
+use cosmwasm_std::{coin, MessageInfo, Response, Uint128};
+use provwasm_std::ProvenanceMsg;
 
 pub struct TestRegisterPayable {
     pub info: MessageInfo,
@@ -49,7 +53,10 @@ impl TestRegisterPayable {
 impl Default for TestRegisterPayable {
     fn default() -> Self {
         TestRegisterPayable {
-            info: mock_info(DEFAULT_INFO_NAME, &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())]),
+            info: mock_info(
+                DEFAULT_INFO_NAME,
+                &[coin(100, DEFAULT_ONBOARDING_DENOM.to_string())],
+            ),
             contract_name: DEFAULT_CONTRACT_NAME.to_string(),
             register_payable: TestRegisterPayable::default_register_payable(),
         }
@@ -61,7 +68,12 @@ pub fn test_register_payable(
     provenance_util: &MockProvenanceUtil,
     msg: TestRegisterPayable,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let response = register_payable_with_util(deps.as_mut(), provenance_util, msg.info, msg.register_payable);
+    let response = register_payable_with_util(
+        deps.as_mut(),
+        provenance_util,
+        msg.info,
+        msg.register_payable,
+    );
     provenance_util.bind_captured_attribute_named(deps, msg.contract_name);
     response
 }

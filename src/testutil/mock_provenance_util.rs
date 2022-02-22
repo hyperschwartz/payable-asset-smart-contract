@@ -1,17 +1,21 @@
-use std::cell::{RefCell};
-use cosmwasm_std::{CosmosMsg, Deps, QuerierWrapper, StdResult};
-use provwasm_std::{ProvenanceMsg, ProvenanceQuery, Scope};
 use crate::core::error::ContractError;
 use crate::core::state::PayableScopeAttribute;
-use crate::testutil::test_utilities::{mock_default_scope_attribute, mock_scope_attribute, MockOwnedDeps};
+use crate::testutil::test_utilities::{
+    mock_default_scope_attribute, mock_scope_attribute, MockOwnedDeps,
+};
 use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl, WriteAttributeMessages};
+use cosmwasm_std::{CosmosMsg, Deps, QuerierWrapper, StdResult};
+use provwasm_std::{ProvenanceMsg, ProvenanceQuery, Scope};
+use std::cell::RefCell;
 
 pub struct MockProvenanceUtil {
     captured_attributes: RefCell<Vec<PayableScopeAttribute>>,
 }
 impl MockProvenanceUtil {
     pub fn new() -> MockProvenanceUtil {
-        MockProvenanceUtil { captured_attributes: RefCell::new(vec![]), }
+        MockProvenanceUtil {
+            captured_attributes: RefCell::new(vec![]),
+        }
     }
 
     fn add_attribute(&self, attribute: PayableScopeAttribute) {
@@ -53,7 +57,11 @@ impl MockProvenanceUtil {
         }
     }
 
-    pub fn bind_captured_attribute_named(&self, deps: &mut MockOwnedDeps, contract_name: impl Into<String>) {
+    pub fn bind_captured_attribute_named(
+        &self,
+        deps: &mut MockOwnedDeps,
+        contract_name: impl Into<String>,
+    ) {
         if let Some(attr) = self.captured_attributes.borrow().last() {
             mock_scope_attribute(deps, contract_name, attr);
         }

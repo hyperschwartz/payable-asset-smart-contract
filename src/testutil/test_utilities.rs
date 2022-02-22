@@ -1,13 +1,13 @@
 use crate::contract::instantiate;
 use crate::core::error::ContractError;
 use crate::core::msg::{ExecuteMsg, InitMsg};
+use crate::core::state::PayableScopeAttribute;
+use crate::testutil::mock_provenance_util::MockProvenanceUtil;
 use cosmwasm_std::testing::{mock_env, mock_info, MockApi, MockStorage};
 use cosmwasm_std::{Addr, Decimal, DepsMut, Env, MessageInfo, OwnedDeps, Response, Uint128};
 use provwasm_mocks::ProvenanceMockQuerier;
 use provwasm_std::{Party, PartyType, ProvenanceMsg, ProvenanceQuery, Scope};
 use serde_json_wasm::to_string;
-use crate::core::state::PayableScopeAttribute;
-use crate::testutil::mock_provenance_util::MockProvenanceUtil;
 
 pub type MockOwnedDeps = OwnedDeps<MockStorage, MockApi, ProvenanceMockQuerier, ProvenanceQuery>;
 
@@ -68,10 +68,7 @@ pub fn test_instantiate(
     )
 }
 
-pub fn setup_test_suite(
-    deps: &mut MockOwnedDeps,
-    args: InstArgs,
-) -> MockProvenanceUtil {
+pub fn setup_test_suite(deps: &mut MockOwnedDeps, args: InstArgs) -> MockProvenanceUtil {
     test_instantiate(deps.as_mut(), args).expect("instantiation should succeed");
     mock_default_scope(deps);
     MockProvenanceUtil::new()
@@ -105,9 +102,10 @@ pub fn get_duped_scope(scope_id: impl Into<String>, owner_address: impl Into<Str
 pub fn mock_scope(
     deps: &mut MockOwnedDeps,
     scope_id: impl Into<String>,
-    owner_address: impl Into<String>
+    owner_address: impl Into<String>,
 ) {
-    deps.querier.with_scope(get_duped_scope(scope_id, owner_address))
+    deps.querier
+        .with_scope(get_duped_scope(scope_id, owner_address))
 }
 
 pub fn mock_default_scope(deps: &mut MockOwnedDeps) {
@@ -121,14 +119,15 @@ pub fn mock_scope_attribute(
 ) {
     deps.querier.with_attributes(
         attribute.scope_id.clone().as_str(),
-        &[(contract_name.into().as_str(), to_string(attribute).unwrap().as_str(), "json")]
+        &[(
+            contract_name.into().as_str(),
+            to_string(attribute).unwrap().as_str(),
+            "json",
+        )],
     );
 }
 
-pub fn mock_default_scope_attribute(
-    deps: &mut MockOwnedDeps,
-    attribute: &PayableScopeAttribute,
-) {
+pub fn mock_default_scope_attribute(deps: &mut MockOwnedDeps, attribute: &PayableScopeAttribute) {
     mock_scope_attribute(deps, DEFAULT_CONTRACT_NAME, attribute);
 }
 

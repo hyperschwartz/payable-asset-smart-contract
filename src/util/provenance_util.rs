@@ -1,8 +1,10 @@
-use cosmwasm_std::{Addr, CosmosMsg, Deps, QuerierWrapper, StdResult};
-use provwasm_std::{add_json_attribute, delete_attributes, ProvenanceMsg, ProvenanceQuerier, ProvenanceQuery, Scope};
 use crate::core::error::ContractError;
 use crate::core::state::PayableScopeAttribute;
 use crate::query::query_payable_by_scope_id::query_payable_attribute_by_scope_id;
+use cosmwasm_std::{Addr, CosmosMsg, Deps, QuerierWrapper, StdResult};
+use provwasm_std::{
+    add_json_attribute, delete_attributes, ProvenanceMsg, ProvenanceQuerier, ProvenanceQuery, Scope,
+};
 
 pub trait ProvenanceUtil {
     fn get_scope_by_id(
@@ -42,8 +44,11 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
         attribute: &PayableScopeAttribute,
         contract_name: impl Into<String>,
     ) -> Result<CosmosMsg<ProvenanceMsg>, ContractError> {
-        if query_payable_attribute_by_scope_id(&deps, &attribute.scope_id).is_ok() {
-            return ContractError::DuplicateRegistration { scope_id: attribute.scope_id.clone() }.to_result();
+        if query_payable_attribute_by_scope_id(deps, &attribute.scope_id).is_ok() {
+            return ContractError::DuplicateRegistration {
+                scope_id: attribute.scope_id.clone(),
+            }
+            .to_result();
         }
         super::provenance_util::get_add_attribute_to_scope_msg(attribute, contract_name)
     }
@@ -54,11 +59,11 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
         contract_name: impl Into<String>,
     ) -> Result<WriteAttributeMessages, ContractError> {
         let contract_name = contract_name.into();
-        let delete_attributes_msg = delete_attributes(
-            Addr::unchecked(&attribute.scope_id),
-            &contract_name,
-        ).map_err(ContractError::Std)?;
-        let add_attribute_msg = super::provenance_util::get_add_attribute_to_scope_msg(attribute, &contract_name)?;
+        let delete_attributes_msg =
+            delete_attributes(Addr::unchecked(&attribute.scope_id), &contract_name)
+                .map_err(ContractError::Std)?;
+        let add_attribute_msg =
+            super::provenance_util::get_add_attribute_to_scope_msg(attribute, &contract_name)?;
         Ok(WriteAttributeMessages {
             delete_attributes_msg,
             add_attribute_msg,
@@ -78,7 +83,8 @@ fn get_add_attribute_to_scope_msg(
         Addr::unchecked(&attribute.scope_id),
         contract_name,
         attribute,
-    ).map_err(ContractError::Std)
+    )
+    .map_err(ContractError::Std)
 }
 
 pub struct WriteAttributeMessages {
@@ -90,5 +96,3 @@ impl WriteAttributeMessages {
         vec![self.delete_attributes_msg, self.add_attribute_msg]
     }
 }
-
-

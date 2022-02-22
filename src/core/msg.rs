@@ -3,7 +3,7 @@ use cosmwasm_std::{CustomQuery, Decimal, Deps, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::core::state::{StateV2};
+use crate::core::state::StateV2;
 use crate::execute::make_payment::MakePaymentV1;
 use crate::execute::oracle_approval::OracleApprovalV1;
 use crate::execute::register_payable::RegisterPayableV2;
@@ -173,12 +173,12 @@ impl ValidatedMsg for QueryMsg {
                 if scope_id.is_empty() {
                     invalid_fields.push("scope_id");
                 }
-            },
+            }
             QueryMsg::QueryPayableByUuid { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            },
+            }
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()

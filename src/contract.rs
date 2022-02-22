@@ -1,16 +1,16 @@
 use crate::core::error::ContractError;
 use crate::core::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
-use crate::execute::make_payment::{make_payment};
-use crate::execute::oracle_approval::{oracle_approval};
-use crate::execute::register_payable::{register_payable};
+use crate::execute::make_payment::make_payment;
+use crate::execute::oracle_approval::oracle_approval;
+use crate::execute::register_payable::register_payable;
 use crate::instantiate::init_contract::init_contract;
 use crate::migrate::migrate_contract::migrate_contract;
+use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
 use crate::query::query_state::query_state;
 use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
-use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 
 /// Initialize the contract
 #[entry_point]
@@ -36,8 +36,12 @@ pub fn query(
     msg.validate()?;
     match msg {
         QueryMsg::QueryState {} => query_state(deps),
-        QueryMsg::QueryPayableByScopeId { scope_id } => query_payable_binary_by_scope_id(&deps, scope_id),
-        QueryMsg::QueryPayableByUuid { payable_uuid } => query_payable_binary_by_uuid(&deps, payable_uuid),
+        QueryMsg::QueryPayableByScopeId { scope_id } => {
+            query_payable_binary_by_scope_id(&deps, scope_id)
+        }
+        QueryMsg::QueryPayableByUuid { payable_uuid } => {
+            query_payable_binary_by_uuid(&deps, payable_uuid)
+        }
     }
 }
 
@@ -52,7 +56,9 @@ pub fn execute(
     // Ensure that the message is valid before processing the request
     msg.validate()?;
     match msg {
-        ExecuteMsg::RegisterPayable { .. } => register_payable(deps, info, msg.to_register_payable()?),
+        ExecuteMsg::RegisterPayable { .. } => {
+            register_payable(deps, info, msg.to_register_payable()?)
+        }
         ExecuteMsg::OracleApproval { .. } => oracle_approval(deps, info, msg.to_oracle_approval()?),
         ExecuteMsg::MakePayment { .. } => make_payment(deps, info, msg.to_make_payment()?),
     }

@@ -8,9 +8,7 @@
     "fee_collection_address",
     "fee_percent",
     "onboarding_cost",
-    "onboarding_denom",
-    "oracle_address",
-    "payable_type"
+    "onboarding_denom"
   ],
   "properties": {
     "contract_name": {
@@ -32,12 +30,6 @@
       "type": "string"
     },
     "onboarding_denom": {
-      "type": "string"
-    },
-    "oracle_address": {
-      "type": "string"
-    },
-    "payable_type": {
       "type": "string"
     }
   },
