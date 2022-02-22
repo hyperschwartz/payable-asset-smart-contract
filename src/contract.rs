@@ -4,11 +4,10 @@ use crate::execute::make_payment::make_payment;
 use crate::execute::oracle_approval::oracle_approval;
 use crate::execute::register_payable::register_payable;
 use crate::instantiate::init_contract::init_contract;
-use crate::migrate::migrate_contract::migrate_contract;
+use crate::migrate::migrate_contract::{migrate_contract, migrate_to_scope_attributes};
 use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
 use crate::query::query_state::query_state;
-use crate::util::provenance_util::ProvenanceUtilImpl;
 use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
@@ -62,6 +61,7 @@ pub fn execute(
         }
         ExecuteMsg::OracleApproval { .. } => oracle_approval(deps, info, msg.to_oracle_approval()?),
         ExecuteMsg::MakePayment { .. } => make_payment(deps, info, msg.to_make_payment()?),
+        ExecuteMsg::MigrateToScopeAddresses {} => migrate_to_scope_attributes(deps),
     }
 }
 
@@ -75,5 +75,5 @@ pub fn migrate(
     // Ensure that the message is valid before processing the request
     msg.validate()?;
     let migrate_msg = msg.to_migrate_contract_v2(&deps.as_ref())?;
-    migrate_contract(deps, &ProvenanceUtilImpl, migrate_msg)
+    migrate_contract(deps, migrate_msg)
 }

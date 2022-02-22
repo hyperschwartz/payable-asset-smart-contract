@@ -82,6 +82,18 @@
         }
       },
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "migrate_to_scope_addresses"
+      ],
+      "properties": {
+        "migrate_to_scope_addresses": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
     }
   ],
   "definitions": {

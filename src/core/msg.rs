@@ -71,6 +71,8 @@ pub enum ExecuteMsg {
     MakePayment {
         payable_uuid: String,
     },
+    // TODO: remove this after the migration is complete
+    MigrateToScopeAddresses {},
 }
 impl ExecuteMsg {
     pub fn to_register_payable(self) -> Result<RegisterPayableV2, ContractError> {
@@ -147,6 +149,7 @@ impl ValidatedMsg for ExecuteMsg {
                     invalid_fields.push("payable_uuid");
                 }
             }
+            ExecuteMsg::MigrateToScopeAddresses {} => (),
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
@@ -255,7 +258,6 @@ impl MigrateMsg {
             onboarding_denom: self.onboarding_denom,
             fee_collection_address,
             fee_percent: self.fee_percent,
-            migrate_to_scope_attributes: self.migrate_to_scope_attributes.unwrap_or(false),
         })
     }
 }

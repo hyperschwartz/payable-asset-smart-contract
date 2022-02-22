@@ -94,7 +94,8 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
 
 /// Helper function to generate an "add attribute" message, as the functionality is re-used across
 /// multiple functions.
-fn get_add_attribute_to_scope_msg(
+// TODO: Make this private once the migration is gone
+pub fn get_add_attribute_to_scope_msg(
     attribute: &PayableScopeAttribute,
     contract_name: impl Into<String>,
 ) -> Result<CosmosMsg<ProvenanceMsg>, ContractError> {
