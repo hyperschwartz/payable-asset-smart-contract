@@ -1,8 +1,8 @@
 use crate::core::error::ContractError;
 use crate::core::msg::{ExecuteMsg, InitMsg, MigrateMsg, QueryMsg};
-use crate::execute::make_payment::{make_payment, MakePaymentV1};
-use crate::execute::oracle_approval::{oracle_approval, OracleApprovalV1};
-use crate::execute::register_payable::{register_payable, RegisterPayableV2};
+use crate::execute::make_payment::{make_payment};
+use crate::execute::oracle_approval::{oracle_approval};
+use crate::execute::register_payable::{register_payable};
 use crate::instantiate::init_contract::init_contract;
 use crate::migrate::migrate_contract::migrate_contract;
 use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
@@ -52,31 +52,9 @@ pub fn execute(
     // Ensure that the message is valid before processing the request
     msg.validate()?;
     match msg {
-        ExecuteMsg::RegisterPayable {
-            payable_type,
-            payable_uuid,
-            scope_id,
-            oracle_address,
-            payable_denom,
-            payable_total,
-        } => register_payable(
-            deps,
-            info,
-            RegisterPayableV2 {
-                payable_type,
-                payable_uuid,
-                scope_id,
-                oracle_address,
-                payable_denom,
-                payable_total,
-            },
-        ),
-        ExecuteMsg::OracleApproval { payable_uuid } => {
-            oracle_approval(deps, info, OracleApprovalV1 { payable_uuid })
-        }
-        ExecuteMsg::MakePayment { payable_uuid } => {
-            make_payment(deps, info, MakePaymentV1 { payable_uuid })
-        }
+        ExecuteMsg::RegisterPayable { .. } => register_payable(deps, info, msg.to_register_payable()?),
+        ExecuteMsg::OracleApproval { .. } => oracle_approval(deps, info, msg.to_oracle_approval()?),
+        ExecuteMsg::MakePayment { .. } => make_payment(deps, info, msg.to_make_payment()?),
     }
 }
 

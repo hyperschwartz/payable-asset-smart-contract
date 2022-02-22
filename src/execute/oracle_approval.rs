@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
 use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
-use crate::util::provenance_utils::upsert_attribute_to_scope;
+use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OracleApprovalV1 {
@@ -16,6 +16,15 @@ pub struct OracleApprovalV1 {
 
 pub fn oracle_approval(
     deps: DepsMut<ProvenanceQuery>,
+    info: MessageInfo,
+    oracle_approval: OracleApprovalV1,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    oracle_approval_with_util(deps, &ProvenanceUtilImpl, info, oracle_approval)
+}
+
+pub fn oracle_approval_with_util<T : ProvenanceUtil>(
+    deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
     info: MessageInfo,
     oracle_approval: OracleApprovalV1,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
@@ -58,7 +67,7 @@ pub fn oracle_approval(
     scope_attribute.oracle_approved = true;
     // Add messages that will remove the current attribute and replace it with the attribute with an
     // oracle approval on it
-    messages.append(&mut upsert_attribute_to_scope(&scope_attribute, &state.contract_name)?.to_vec());
+    messages.append(&mut provenance_util.upsert_attribute_to_scope(&scope_attribute, &state.contract_name)?.to_vec());
     Ok(Response::new()
         .add_messages(messages)
         .add_attribute(ORACLE_APPROVED_KEY, &scope_attribute.payable_uuid)

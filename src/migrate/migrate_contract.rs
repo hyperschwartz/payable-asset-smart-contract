@@ -150,8 +150,8 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
 #[cfg(test)]
 mod tests {
     use crate::core::error::ContractError;
-    use crate::core::state::{config_read, config_read_v2};
-    use crate::migrate::migrate_contract::{migrate_contract, state_change_attr_name, state_change_attribute, MigrateContractV1, MigrateContractV2};
+    use crate::core::state::{config_read_v2};
+    use crate::migrate::migrate_contract::{migrate_contract, state_change_attr_name, state_change_attribute, MigrateContractV2};
     use crate::migrate::version_info::{
         get_version_info, set_version_info, VersionInfoV1, CONTRACT_NAME, CONTRACT_VERSION,
     };

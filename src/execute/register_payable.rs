@@ -1,7 +1,7 @@
 use crate::core::error::ContractError;
 use crate::core::state::{config_read_v2, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2};
 use crate::util::constants::{ORACLE_ADDRESS_KEY, ORACLE_FUNDS_KEPT, PAYABLE_REGISTERED_KEY, PAYABLE_TYPE_KEY, PAYABLE_UUID_KEY, REFUND_AMOUNT_KEY, REGISTERED_DENOM_KEY, SCOPE_ID_KEY, TOTAL_OWED_KEY};
-use crate::util::provenance_utils::{get_add_initial_attribute_to_scope_msg, get_scope_by_id};
+use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
 use cosmwasm_std::{coin, Attribute, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response, Uint128, Addr};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use schemars::JsonSchema;
@@ -17,9 +17,32 @@ pub struct RegisterPayableV2 {
     pub payable_denom: String,
     pub payable_total: Uint128,
 }
+impl RegisterPayableV2 {
+    pub fn to_scope_attribute(self) -> PayableScopeAttribute {
+        PayableScopeAttribute {
+            payable_type: self.payable_type,
+            payable_uuid: self.payable_uuid,
+            scope_id: self.scope_id,
+            oracle_address: Addr::unchecked(self.oracle_address),
+            payable_denom: self.payable_denom,
+            payable_total_owed: self.payable_total,
+            payable_remaining_owed: self.payable_total,
+            oracle_approved: false,
+        }
+    }
+}
 
 pub fn register_payable(
     deps: DepsMut<ProvenanceQuery>,
+    info: MessageInfo,
+    register: RegisterPayableV2,
+) -> Result<Response<ProvenanceMsg>, ContractError> {
+    register_payable_with_util(deps, &ProvenanceUtilImpl, info, register)
+}
+
+pub fn register_payable_with_util<T : ProvenanceUtil>(
+    deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
     info: MessageInfo,
     register: RegisterPayableV2,
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
@@ -52,7 +75,7 @@ pub fn register_payable(
     // then they are not authorized to register this payable.
     // Skip this step locally - creating a scope is an unnecessary piece of testing this
     if !state.is_local
-        && get_scope_by_id(&deps.querier, &register.scope_id)?
+        && provenance_util.get_scope_by_id(&deps.querier, &register.scope_id)?
             .owners
             .into_iter()
             .filter(|owner| owner.address == info.sender)
@@ -80,17 +103,8 @@ pub fn register_payable(
     attributes.push(Attribute::new(SCOPE_ID_KEY, &register.scope_id));
     // Tag the scope with an attribute that contains all information about its current payable
     // status
-    let scope_attribute = PayableScopeAttribute {
-        payable_type: register.payable_type,
-        payable_uuid: register.payable_uuid,
-        scope_id: register.scope_id,
-        oracle_address: Addr::unchecked(register.oracle_address),
-        payable_denom: register.payable_denom,
-        payable_total_owed: register.payable_total,
-        payable_remaining_owed: register.payable_total,
-        oracle_approved: false,
-    };
-    messages.push(get_add_initial_attribute_to_scope_msg(&deps.as_ref(), &scope_attribute, &state.contract_name)?);
+    let scope_attribute = register.to_scope_attribute();
+    messages.push(provenance_util.get_add_initial_attribute_to_scope_msg(&deps.as_ref(), &scope_attribute, &state.contract_name)?);
     // Store a link between the payable's uuid and the scope id in local storage for queries
     let payable_meta = PayableMetaV2 {
         payable_uuid: scope_attribute.payable_uuid,

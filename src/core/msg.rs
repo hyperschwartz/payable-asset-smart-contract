@@ -4,6 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::state::{StateV2};
+use crate::execute::make_payment::MakePaymentV1;
+use crate::execute::oracle_approval::OracleApprovalV1;
+use crate::execute::register_payable::RegisterPayableV2;
 use crate::migrate::migrate_contract::{MigrateContractV1, MigrateContractV2};
 use crate::util::conversions::to_uint128;
 use crate::util::traits::ValidatedMsg;
@@ -68,6 +71,40 @@ pub enum ExecuteMsg {
     MakePayment {
         payable_uuid: String,
     },
+}
+impl ExecuteMsg {
+    pub fn to_register_payable(self) -> Result<RegisterPayableV2, ContractError> {
+        match self {
+            ExecuteMsg::RegisterPayable {
+                payable_type,
+                payable_uuid,
+                scope_id,
+                oracle_address,
+                payable_denom,
+                payable_total,
+            } => Ok(RegisterPayableV2 {
+                payable_type,
+                payable_uuid,
+                scope_id,
+                oracle_address,
+                payable_denom,
+                payable_total,
+            }),
+            _ => ContractError::std_err("expected RegisterPayable message type"),
+        }
+    }
+    pub fn to_oracle_approval(self) -> Result<OracleApprovalV1, ContractError> {
+        match self {
+            ExecuteMsg::OracleApproval { payable_uuid } => Ok(OracleApprovalV1 { payable_uuid }),
+            _ => ContractError::std_err("expected OracleApproval message type"),
+        }
+    }
+    pub fn to_make_payment(self) -> Result<MakePaymentV1, ContractError> {
+        match self {
+            ExecuteMsg::MakePayment { payable_uuid } => Ok(MakePaymentV1 { payable_uuid }),
+            _ => ContractError::std_err("expected MakePayment message type"),
+        }
+    }
 }
 impl ValidatedMsg for ExecuteMsg {
     fn validate(&self) -> Result<(), ContractError> {

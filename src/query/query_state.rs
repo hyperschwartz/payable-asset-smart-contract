@@ -14,7 +14,7 @@ mod tests {
     use crate::core::msg::{QueryMsg, QueryResponse};
     use crate::testutil::test_utilities::{
         test_instantiate, InstArgs, DEFAULT_CONTRACT_NAME, DEFAULT_FEE_COLLECTION_ADDRESS,
-        DEFAULT_FEE_PERCENT, DEFAULT_ONBOARDING_DENOM, DEFAULT_ORACLE_ADDRESS,
+        DEFAULT_FEE_PERCENT, DEFAULT_ONBOARDING_DENOM,
     };
     use cosmwasm_std::testing::mock_env;
     use cosmwasm_std::{from_binary, Decimal, Uint128};
