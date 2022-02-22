@@ -11,6 +11,7 @@ use crate::query::query_state::query_state;
 use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
+use crate::util::provenance_util::ProvenanceUtilImpl;
 
 /// Initialize the contract
 #[entry_point]
@@ -70,9 +71,9 @@ pub fn migrate(
     deps: DepsMut<ProvenanceQuery>,
     _env: Env,
     msg: MigrateMsg,
-) -> Result<Response, ContractError> {
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     // Ensure that the message is valid before processing the request
     msg.validate()?;
     let migrate_msg = msg.to_migrate_contract_v2(&deps.as_ref())?;
-    migrate_contract(deps, migrate_msg)
+    migrate_contract(deps, &ProvenanceUtilImpl, migrate_msg)
 }

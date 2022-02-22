@@ -51,6 +51,9 @@ pub enum ContractError {
         invalid_denoms: Vec<String>,
     },
 
+    #[error("Invalid migration: {0}")]
+    InvalidMigration(String),
+
     #[error("Payable {payable_uuid} was invalid: {invalid_reason}")]
     InvalidPayable {
         payable_uuid: String,
@@ -94,8 +97,8 @@ impl ContractError {
         Err(self)
     }
     /// A simple abstraction to wrap an error response just by passing the message
-    pub fn std_err<T>(msg: impl Into<String>) -> Result<T, ContractError> {
-        Err(ContractError::Std(StdError::generic_err(msg)))
+    pub fn std_err(msg: impl Into<String>) -> ContractError {
+        ContractError::Std(StdError::generic_err(msg))
     }
     /// Helper to map a Vec<&str> into an InvalidFields enum
     pub fn invalid_fields(fields: Vec<&str>) -> ContractError {

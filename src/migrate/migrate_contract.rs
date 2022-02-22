@@ -1,47 +1,22 @@
 use crate::core::error::ContractError;
-use crate::core::state::config_v2;
+use crate::core::state::{config, config_read, config_read_v2, config_v2, payable_meta_storage, payable_meta_storage_read, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2};
 use crate::migrate::version_info::{
     get_version_info, migrate_version_info, CONTRACT_NAME, CONTRACT_VERSION,
 };
 use crate::util::constants::{
     MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION, MIGRATION_STATE_CHANGE_PREFIX,
 };
-use cosmwasm_std::{Addr, Attribute, Decimal, DepsMut, Response, Storage, Uint128};
-use provwasm_std::ProvenanceQuery;
+use cosmwasm_std::{Addr, Attribute, CosmosMsg, Decimal, DepsMut, Order, Response, Storage, Uint128};
+use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use semver::Version;
-
-pub struct MigrateContractV1 {
-    pub onboarding_cost: Option<Uint128>,
-    pub onboarding_denom: Option<String>,
-    pub fee_collection_address: Option<Addr>,
-    pub fee_percent: Option<Decimal>,
-    pub oracle_address: Option<Addr>,
-}
-impl MigrateContractV1 {
-    pub fn empty() -> MigrateContractV1 {
-        MigrateContractV1 {
-            onboarding_cost: None,
-            onboarding_denom: None,
-            fee_collection_address: None,
-            fee_percent: None,
-            oracle_address: None,
-        }
-    }
-
-    pub fn has_state_changes(&self) -> bool {
-        self.onboarding_cost.is_some()
-            || self.onboarding_denom.is_some()
-            || self.fee_collection_address.is_some()
-            || self.fee_percent.is_some()
-            || self.oracle_address.is_some()
-    }
-}
+use crate::util::provenance_util::ProvenanceUtil;
 
 pub struct MigrateContractV2 {
     pub onboarding_cost: Option<Uint128>,
     pub onboarding_denom: Option<String>,
     pub fee_collection_address: Option<Addr>,
     pub fee_percent: Option<Decimal>,
+    pub migrate_to_scope_attributes: bool,
 }
 impl MigrateContractV2 {
     pub fn empty() -> MigrateContractV2 {
@@ -50,6 +25,7 @@ impl MigrateContractV2 {
             onboarding_denom: None,
             fee_collection_address: None,
             fee_percent: None,
+            migrate_to_scope_attributes: false,
         }
     }
 
@@ -63,10 +39,11 @@ impl MigrateContractV2 {
 
 /// Migrates the contract to a new version, utilizing the values within the msg param to determine
 /// which fields in the app state to change.
-pub fn migrate_contract(
+pub fn migrate_contract<T: ProvenanceUtil>(
     deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
     migrate: MigrateContractV2,
-) -> Result<Response, ContractError> {
+) -> Result<Response<ProvenanceMsg>, ContractError> {
     // Ensure the provided version info stored in the contract is valid for the migration before
     // attempting any contract modifications
     check_valid_migration_versioning(deps.storage)?;
@@ -112,7 +89,12 @@ pub fn migrate_contract(
         MIGRATION_CONTRACT_VERSION,
         &new_version_info.version,
     ));
-    Ok(Response::new().add_attributes(attributes))
+    let migration_messages = if migrate.migrate_to_scope_attributes {
+        migrate_to_scope_attributes(deps, provenance_util)?
+    } else {
+        vec![]
+    };
+    Ok(Response::new().add_messages(migration_messages).add_attributes(attributes))
 }
 
 fn state_change_attribute(field_name: impl Into<String>, value: impl Into<String>) -> Attribute {
@@ -147,6 +129,73 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
     Ok(())
 }
 
+/// This migration assumes that there is no state v1
+fn migrate_to_scope_attributes<T: ProvenanceUtil>(
+    deps: DepsMut<ProvenanceQuery>,
+    provenance_util: &T,
+) -> Result<Vec<CosmosMsg<ProvenanceMsg>>, ContractError> {
+    let state_v1 = config(deps.storage).load()?;
+    let payable_type = state_v1.payable_type.clone();
+    let oracle_address = state_v1.oracle_address.clone();
+    let mut config_v2 = config_v2(deps.storage);
+    if config_v2.load().is_ok() {
+        return ContractError::InvalidMigration("state v2 found - no need to migrate".to_string()).to_result();
+    }
+    let state_v2 = StateV2 {
+        contract_name: state_v1.contract_name,
+        onboarding_cost: state_v1.onboarding_cost,
+        onboarding_denom: state_v1.onboarding_denom,
+        fee_collection_address: state_v1.fee_collection_address,
+        fee_percent: state_v1.fee_percent,
+        is_local: state_v1.is_local,
+    };
+    // Store the new v2 state
+    config_v2.save(&state_v2)?;
+    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
+    let mut meta_v2s: Vec<PayableMetaV2> = vec![];
+    let ro_v1_storage = payable_meta_storage_read(deps.storage);
+    // Migrate all values in local storage to their appropriate scope attributes
+    let mut attribute_results = ro_v1_storage.range(None, None, Order::Ascending).into_iter().map(|record| {
+        let payable_meta = record.expect("expected the payable meta record to deserialize appropriately").1;
+        // Create a meta v2 that will store the uuid -> scope link for querying
+        let meta_v2 = PayableMetaV2 {
+            payable_uuid: payable_meta.payable_uuid.clone(),
+            scope_id: payable_meta.scope_id.clone(),
+        };
+        // Store the v2 in a vector for saving all at once. Don't want to partially migrate if an error occurs
+        meta_v2s.push(meta_v2);
+        let scope_attribute = PayableScopeAttribute {
+            payable_type: payable_type.clone(),
+            payable_uuid: payable_meta.payable_uuid,
+            scope_id: payable_meta.scope_id,
+            oracle_address: oracle_address.clone(),
+            payable_denom: payable_meta.payable_denom,
+            payable_total_owed: payable_meta.payable_total_owed,
+            payable_remaining_owed: payable_meta.payable_remaining_owed,
+            oracle_approved: payable_meta.oracle_approved,
+        };
+        // Create and push a message that will add a json attribute to the scope
+        provenance_util.get_add_initial_attribute_to_scope_msg(
+            &deps.as_ref(),
+            &scope_attribute,
+            &state_v2.contract_name,
+        )
+    });
+    if attribute_results.any(|result| result.is_err()) {
+        return ContractError::InvalidMigration("One or more metadata could not be converted to attribute add messages".to_string()).to_result();
+    }
+    attribute_results.into_iter().for_each(|result| {
+        messages.push(result.unwrap());
+    });
+    let mut storage_v2 = payable_meta_storage_v2(deps.storage);
+    meta_v2s.into_iter().for_each(|meta_v2| {
+        if storage_v2.save(meta_v2.payable_uuid.as_bytes(), &meta_v2).is_err() {
+            panic!("failed to store payable {} link in storage. migration only partially completed!", meta_v2.payable_uuid);
+        }
+    });
+    Ok(messages)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::error::ContractError;
@@ -161,6 +210,7 @@ mod tests {
     use crate::util::constants::{MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION};
     use cosmwasm_std::{Addr, Decimal, Uint128};
     use provwasm_mocks::mock_dependencies;
+    use crate::testutil::mock_provenance_util::MockProvenanceUtil;
 
     #[test]
     fn test_state_change_attr_name() {
@@ -229,7 +279,7 @@ mod tests {
             },
         )
         .unwrap();
-        let response = migrate_contract(deps.as_mut(), MigrateContractV2::empty()).unwrap();
+        let response = migrate_contract(deps.as_mut(), &MockProvenanceUtil::new(), MigrateContractV2::empty()).unwrap();
         assert!(
             response.messages.is_empty(),
             "no messages should be sent on migrate"
@@ -268,7 +318,7 @@ mod tests {
         // Instantiate the contract, automatically setting the version and contract name.
         // This can be seen working correctly in init_contract.rs > test_valid_init test
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
-        let response = migrate_contract(deps.as_mut(), MigrateContractV2::empty()).unwrap();
+        let response = migrate_contract(deps.as_mut(), &MockProvenanceUtil::new(), MigrateContractV2::empty()).unwrap();
         assert!(
             response.messages.is_empty(),
             "no messages should be sent on migrate"
@@ -307,11 +357,13 @@ mod tests {
         test_instantiate(deps.as_mut(), InstArgs::default()).unwrap();
         let response = migrate_contract(
             deps.as_mut(),
+            &MockProvenanceUtil::new(),
             MigrateContractV2 {
                 onboarding_cost: Some(Uint128::new(134)),
                 onboarding_denom: Some("dogecoin".to_string()),
                 fee_collection_address: Some(Addr::unchecked("new-fee-addr")),
                 fee_percent: Some(Decimal::percent(12)),
+                migrate_to_scope_attributes: false,
             },
         )
         .unwrap();
@@ -399,7 +451,7 @@ mod tests {
             },
         )
         .unwrap();
-        match migrate_contract(deps.as_mut(), MigrateContractV2::empty()).unwrap_err() {
+        match migrate_contract(deps.as_mut(), &MockProvenanceUtil::new(), MigrateContractV2::empty()).unwrap_err() {
             ContractError::InvalidContractName {
                 current_contract,
                 migration_contract,
@@ -430,7 +482,7 @@ mod tests {
             },
         )
         .unwrap();
-        match migrate_contract(deps.as_mut(), MigrateContractV2::empty()).unwrap_err() {
+        match migrate_contract(deps.as_mut(), &MockProvenanceUtil::new(), MigrateContractV2::empty()).unwrap_err() {
             ContractError::InvalidContractVersion {
                 current_version,
                 migration_version,

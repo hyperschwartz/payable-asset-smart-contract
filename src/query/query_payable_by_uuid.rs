@@ -45,6 +45,7 @@ mod tests {
     use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::mock_env;
     use provwasm_mocks::mock_dependencies;
+    use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
 
     #[test]
     fn test_query_payable_by_uuid_after_register() {
@@ -91,5 +92,15 @@ mod tests {
         );
         assert_eq!(DEFAULT_PAYABLE_TOTAL, scope_attribute.payable_remaining_owed.u128(), "expected the payable remaining owed to reflect the default value because no payments have been made");
         assert_eq!(false, scope_attribute.oracle_approved, "when initially created, the meta should show that the oracle has not yet approved the payable");
+    }
+
+    #[test]
+    fn test_query_payable_attribute_by_uuid() {
+        let mut deps = mock_dependencies(&[]);
+        let provenance_util = setup_test_suite(&mut deps, InstArgs::default());
+        test_register_payable(&mut deps, &provenance_util, TestRegisterPayable::default()).unwrap();
+        let scope_attr = query_payable_attribute_by_uuid(&deps.as_ref(), DEFAULT_PAYABLE_UUID)
+            .expect("the default payable should deserialize correctly");
+        provenance_util.assert_attribute_matches_latest(&scope_attr);
     }
 }

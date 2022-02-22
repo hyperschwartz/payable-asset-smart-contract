@@ -7,7 +7,7 @@ use crate::core::state::StateV2;
 use crate::execute::make_payment::MakePaymentV1;
 use crate::execute::oracle_approval::OracleApprovalV1;
 use crate::execute::register_payable::RegisterPayableV2;
-use crate::migrate::migrate_contract::{MigrateContractV1, MigrateContractV2};
+use crate::migrate::migrate_contract::{MigrateContractV2};
 use crate::util::conversions::to_uint128;
 use crate::util::traits::ValidatedMsg;
 
@@ -90,19 +90,19 @@ impl ExecuteMsg {
                 payable_denom,
                 payable_total,
             }),
-            _ => ContractError::std_err("expected RegisterPayable message type"),
+            _ => ContractError::std_err("expected RegisterPayable message type").to_result(),
         }
     }
     pub fn to_oracle_approval(self) -> Result<OracleApprovalV1, ContractError> {
         match self {
             ExecuteMsg::OracleApproval { payable_uuid } => Ok(OracleApprovalV1 { payable_uuid }),
-            _ => ContractError::std_err("expected OracleApproval message type"),
+            _ => ContractError::std_err("expected OracleApproval message type").to_result(),
         }
     }
     pub fn to_make_payment(self) -> Result<MakePaymentV1, ContractError> {
         match self {
             ExecuteMsg::MakePayment { payable_uuid } => Ok(MakePaymentV1 { payable_uuid }),
-            _ => ContractError::std_err("expected MakePayment message type"),
+            _ => ContractError::std_err("expected MakePayment message type").to_result(),
         }
     }
 }
@@ -199,7 +199,7 @@ pub struct MigrateMsg {
     pub onboarding_denom: Option<String>,
     pub fee_collection_address: Option<String>,
     pub fee_percent: Option<Decimal>,
-    pub oracle_address: Option<String>,
+    pub migrate_to_scope_attributes: Option<bool>,
 }
 impl ValidatedMsg for MigrateMsg {
     fn validate(&self) -> Result<(), ContractError> {
@@ -224,11 +224,6 @@ impl ValidatedMsg for MigrateMsg {
                 invalid_fields.push("fee_percent");
             }
         }
-        if let Some(addr) = &self.oracle_address {
-            if addr.is_empty() {
-                invalid_fields.push("oracle_address");
-            }
-        }
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
         } else {
@@ -239,36 +234,6 @@ impl ValidatedMsg for MigrateMsg {
 impl MigrateMsg {
     /// Converts the message from a contract message into a parsed and converted message for
     /// processing in downstream migration code.
-    pub fn to_migrate_contract_v1<T: CustomQuery>(
-        self,
-        deps: &Deps<T>,
-    ) -> Result<MigrateContractV1, ContractError> {
-        // Unbox mapped fields, convert and validate, and re-box if necessary. Otherwise,
-        // pass-through to None
-        let onboarding_cost = if let Some(cost) = self.onboarding_cost {
-            Some(to_uint128(cost)?)
-        } else {
-            None
-        };
-        let fee_collection_address = if let Some(fee_addr) = self.fee_collection_address {
-            Some(deps.api.addr_validate(fee_addr.as_str())?)
-        } else {
-            None
-        };
-        let oracle_address = if let Some(oracle_addr) = self.oracle_address {
-            Some(deps.api.addr_validate(oracle_addr.as_str())?)
-        } else {
-            None
-        };
-        Ok(MigrateContractV1 {
-            onboarding_cost,
-            onboarding_denom: self.onboarding_denom,
-            fee_collection_address,
-            fee_percent: self.fee_percent,
-            oracle_address,
-        })
-    }
-
     pub fn to_migrate_contract_v2<T: CustomQuery>(
         self,
         deps: &Deps<T>,
@@ -290,6 +255,7 @@ impl MigrateMsg {
             onboarding_denom: self.onboarding_denom,
             fee_collection_address,
             fee_percent: self.fee_percent,
+            migrate_to_scope_attributes: self.migrate_to_scope_attributes.unwrap_or(false),
         })
     }
 }
@@ -465,7 +431,7 @@ mod tests {
             onboarding_denom: None,
             fee_collection_address: None,
             fee_percent: None,
-            oracle_address: None,
+            migrate_to_scope_attributes: None,
         }
         .validate()
         .expect("a migrate msg with no fields populated should pass validation");
@@ -510,35 +476,19 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_migrate_oracle_address() {
-        let mut msg = get_valid_migrate_msg();
-        // Empty string bad
-        msg.oracle_address = Some(String::new());
-        test_invalid_msg(&msg, "oracle_address");
-    }
-
-    #[test]
-    fn test_invalid_migration_to_v1_conversion_onboarding_cost() {
+    fn test_invalid_migration_to_v2_conversion_onboarding_cost() {
         let deps = mock_dependencies(&[]);
         let mut msg = get_valid_migrate_msg();
         msg.onboarding_cost = Some("not a number".to_string());
-        assert!(msg.to_migrate_contract_v1(&deps.as_ref()).is_err());
+        assert!(msg.to_migrate_contract_v2(&deps.as_ref()).is_err());
     }
 
     #[test]
-    fn test_invalid_migration_to_v1_conversion_fee_collection_address() {
+    fn test_invalid_migration_to_v2_conversion_fee_collection_address() {
         let deps = mock_dependencies(&[]);
         let mut msg = get_valid_migrate_msg();
         msg.fee_collection_address = Some(String::new());
-        assert!(msg.to_migrate_contract_v1(&deps.as_ref()).is_err());
-    }
-
-    #[test]
-    fn test_invalid_migration_to_v1_conversion_oracle_address() {
-        let deps = mock_dependencies(&[]);
-        let mut msg = get_valid_migrate_msg();
-        msg.oracle_address = Some(String::new());
-        assert!(msg.to_migrate_contract_v1(&deps.as_ref()).is_err());
+        assert!(msg.to_migrate_contract_v2(&deps.as_ref()).is_err());
     }
 
     fn get_valid_init_msg() -> InitMsg {
@@ -590,7 +540,7 @@ mod tests {
             onboarding_denom: Some("nhash".to_string()),
             fee_collection_address: Some("address".to_string()),
             fee_percent: Some(Decimal::percent(50)),
-            oracle_address: Some("address".to_string()),
+            migrate_to_scope_attributes: Some(true),
         }
     }
 
