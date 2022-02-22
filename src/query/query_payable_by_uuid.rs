@@ -43,6 +43,7 @@ mod tests {
     use crate::contract::query;
     use crate::core::msg::QueryMsg;
     use crate::core::state::PayableScopeAttribute;
+    use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
     use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
     use crate::testutil::test_utilities::{
         setup_test_suite, InstArgs, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM,
@@ -51,7 +52,6 @@ mod tests {
     use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::mock_env;
     use provwasm_mocks::mock_dependencies;
-    use crate::query::query_payable_by_uuid::query_payable_attribute_by_uuid;
 
     #[test]
     fn test_query_payable_by_uuid_after_register() {

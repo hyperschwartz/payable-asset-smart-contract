@@ -8,10 +8,10 @@ use crate::migrate::migrate_contract::migrate_contract;
 use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
 use crate::query::query_state::query_state;
+use crate::util::provenance_util::ProvenanceUtilImpl;
 use crate::util::traits::ValidatedMsg;
 use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
-use crate::util::provenance_util::ProvenanceUtilImpl;
 
 /// Initialize the contract
 #[entry_point]

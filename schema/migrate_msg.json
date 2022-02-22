@@ -20,6 +20,12 @@
         }
       ]
     },
+    "migrate_to_scope_attributes": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "onboarding_cost": {
       "type": [
         "string",
@@ -27,12 +33,6 @@
       ]
     },
     "onboarding_denom": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "oracle_address": {
       "type": [
         "string",
         "null"

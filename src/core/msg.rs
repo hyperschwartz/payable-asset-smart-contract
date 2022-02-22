@@ -7,7 +7,7 @@ use crate::core::state::StateV2;
 use crate::execute::make_payment::MakePaymentV1;
 use crate::execute::oracle_approval::OracleApprovalV1;
 use crate::execute::register_payable::RegisterPayableV2;
-use crate::migrate::migrate_contract::{MigrateContractV2};
+use crate::migrate::migrate_contract::MigrateContractV2;
 use crate::util::conversions::to_uint128;
 use crate::util::traits::ValidatedMsg;
 

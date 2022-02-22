@@ -17,7 +17,8 @@ pub fn init_contract(
 ) -> Result<Response<ProvenanceMsg>, ContractError> {
     // Ensure no funds were sent with the message
     if !info.funds.is_empty() {
-        return ContractError::std_err("purchase funds are not allowed to be sent during init").to_result();
+        return ContractError::std_err("purchase funds are not allowed to be sent during init")
+            .to_result();
     }
     // Create and save contract config state. The name is used for setting attributes on user accounts
     config_v2(deps.storage).save(&StateV2 {

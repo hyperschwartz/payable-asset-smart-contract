@@ -149,7 +149,7 @@ struct FeeChargeResponse {
     oracle_fee_amount_kept: u128,
 }
 
-/// Digests all relevant input and creates the appropriate fee messages (including an optional 
+/// Digests all relevant input and creates the appropriate fee messages (including an optional
 /// refund to the sender if required).
 fn validate_fee_params_get_messages(
     info: &MessageInfo,

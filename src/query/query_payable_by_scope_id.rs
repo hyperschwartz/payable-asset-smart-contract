@@ -45,15 +45,18 @@ pub fn query_payable_attribute_by_scope_id(
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::from_binary;
-    use cosmwasm_std::testing::mock_env;
-    use provwasm_mocks::mock_dependencies;
     use crate::contract::query;
     use crate::core::msg::QueryMsg;
     use crate::core::state::PayableScopeAttribute;
     use crate::query::query_payable_by_scope_id::query_payable_attribute_by_scope_id;
     use crate::testutil::register_payable_helpers::{test_register_payable, TestRegisterPayable};
-    use crate::testutil::test_utilities::{DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM, DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID, InstArgs, setup_test_suite};
+    use crate::testutil::test_utilities::{
+        setup_test_suite, InstArgs, DEFAULT_ORACLE_ADDRESS, DEFAULT_PAYABLE_DENOM,
+        DEFAULT_PAYABLE_TOTAL, DEFAULT_PAYABLE_TYPE, DEFAULT_PAYABLE_UUID, DEFAULT_SCOPE_ID,
+    };
+    use cosmwasm_std::from_binary;
+    use cosmwasm_std::testing::mock_env;
+    use provwasm_mocks::mock_dependencies;
 
     #[test]
     fn test_query_payable_by_scope_id_after_register() {
@@ -65,8 +68,9 @@ mod tests {
             mock_env(),
             QueryMsg::QueryPayableByScopeId {
                 scope_id: DEFAULT_SCOPE_ID.to_string(),
-            }
-        ).unwrap();
+            },
+        )
+        .unwrap();
         let scope_attribute = from_binary::<PayableScopeAttribute>(&payable_binary).unwrap();
         assert_eq!(
             DEFAULT_PAYABLE_TYPE,

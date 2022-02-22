@@ -1,5 +1,5 @@
 use crate::core::error::ContractError;
-use cosmwasm_std::{Uint128};
+use cosmwasm_std::Uint128;
 
 /// Converts the derived String into a Uint128, or returns a ContractError if a parsing failure
 /// occurs.
