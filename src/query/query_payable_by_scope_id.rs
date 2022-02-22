@@ -17,6 +17,8 @@ pub fn query_payable_binary_by_scope_id(
     }
 }
 
+/// Finds the PayableScopeAttribute tagged to a scope's address (scope_id) and deserializes the
+/// resulting value from the resulting Binary from the cosmwasm resources.
 pub fn query_payable_attribute_by_scope_id(
     deps: &Deps<ProvenanceQuery>,
     scope_id: impl Into<String>,

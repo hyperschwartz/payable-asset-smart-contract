@@ -3,6 +3,8 @@ use crate::core::state::config_read_v2;
 use cosmwasm_std::{to_binary, Binary, Deps};
 use provwasm_std::ProvenanceQuery;
 
+/// A very simple query that deserializes the StateV2 value in local storage that drives contract
+/// functionality.
 pub fn query_state(deps: Deps<ProvenanceQuery>) -> Result<Binary, ContractError> {
     let state = config_read_v2(deps.storage).load()?;
     Ok(to_binary(&state)?)

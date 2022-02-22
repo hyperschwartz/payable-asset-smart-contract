@@ -5,6 +5,10 @@ use crate::migrate::version_info::migrate_version_info;
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, Uint128};
 use provwasm_std::{bind_name, NameBinding, ProvenanceMsg, ProvenanceQuery};
 
+/// Standard entrypoint for contract -> instantiate.  Generates the initial StateV2 value that
+/// drives and controls various configurations, and automatically binds the contract name to its
+/// address, ensuring that it and it alone has access to its spawned attributes on the registered
+/// payables' scopes.  Also establishes the initial version info storage.
 pub fn init_contract(
     deps: DepsMut<ProvenanceQuery>,
     env: Env,

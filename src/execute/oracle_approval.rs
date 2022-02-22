@@ -11,11 +11,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
 
+/// Contains all relevant fields required in order for an oracle address to mark a payable as
+/// approved and ready for payment.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OracleApprovalV1 {
     pub payable_uuid: String,
 }
 
+/// Parent function path for the contract to mark an oracle approval.  Ensures that the
+/// ProvenanceUtilImpl is the implementation used for this functionality outside of tests.
 pub fn oracle_approval(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
@@ -24,6 +28,13 @@ pub fn oracle_approval(
     oracle_approval_with_util(deps, &ProvenanceUtilImpl, info, oracle_approval)
 }
 
+/// Stamps an oracle approval on the target payable with the following steps:
+/// - Verifies that no funds were send (oracle approvals are free).
+/// - Ensures that the oracle has not yet approved of this transaction.
+/// - Ensures that the payable targeted has been registered.
+/// - Ensures that the sender address is the oracle listed on the payable's scope attribute.
+/// - Sends the oracle fee to the oracle for performing its stamp.
+/// - Updates the attribute on the scope to indicate that the oracle approved successfully.
 pub fn oracle_approval_with_util<T: ProvenanceUtil>(
     deps: DepsMut<ProvenanceQuery>,
     provenance_util: &T,

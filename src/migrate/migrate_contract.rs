@@ -1,5 +1,5 @@
 use crate::core::error::ContractError;
-use crate::core::state::{config, config_read, config_read_v2, config_v2, payable_meta_storage, payable_meta_storage_read, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2};
+use crate::core::state::{config, config_v2, payable_meta_storage_read, payable_meta_storage_v2, PayableMetaV2, PayableScopeAttribute, StateV2};
 use crate::migrate::version_info::{
     get_version_info, migrate_version_info, CONTRACT_NAME, CONTRACT_VERSION,
 };
@@ -9,8 +9,13 @@ use crate::util::constants::{
 use cosmwasm_std::{Addr, Attribute, CosmosMsg, Decimal, DepsMut, Order, Response, Storage, Uint128};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use semver::Version;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use crate::util::provenance_util::ProvenanceUtil;
 
+/// This struct contains all optional values required for migrating the contract.  Its values are
+/// derived via the MigrateMsg's helper functions (found in core/msg.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct MigrateContractV2 {
     pub onboarding_cost: Option<Uint128>,
     pub onboarding_denom: Option<String>,
@@ -19,6 +24,7 @@ pub struct MigrateContractV2 {
     pub migrate_to_scope_attributes: bool,
 }
 impl MigrateContractV2 {
+    /// Helper to derive an empty message for testing purposes.
     pub fn empty() -> MigrateContractV2 {
         MigrateContractV2 {
             onboarding_cost: None,
@@ -29,6 +35,8 @@ impl MigrateContractV2 {
         }
     }
 
+    /// Helper function to make checks for whether or not any optional fields are provided more
+    /// concise.  Useful in testing and to keep the migration code cleaner.
     pub fn has_state_changes(&self) -> bool {
         self.onboarding_cost.is_some()
             || self.onboarding_denom.is_some()

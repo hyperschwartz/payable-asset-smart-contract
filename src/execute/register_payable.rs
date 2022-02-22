@@ -15,6 +15,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Mul;
 
+/// Contains all relevant fields required in order to register a payable with the contract and
+/// stamp its scope with an attribute.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct RegisterPayableV2 {
     pub payable_type: String,
@@ -25,6 +27,9 @@ pub struct RegisterPayableV2 {
     pub payable_total: Uint128,
 }
 impl RegisterPayableV2 {
+    /// Due to the register message including all information required to drive the initial
+    /// attribute that is placed on a scope, this function facilitates that transformation in a
+    /// single line invocation.
     pub fn to_scope_attribute(self) -> PayableScopeAttribute {
         PayableScopeAttribute {
             payable_type: self.payable_type,
@@ -39,6 +44,8 @@ impl RegisterPayableV2 {
     }
 }
 
+/// Parent function path for the contract to register a payable.  Ensures that the ProvenanceUtilImpl
+/// is the implementation used for this functionality outside of tests.
 pub fn register_payable(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
@@ -47,6 +54,12 @@ pub fn register_payable(
     register_payable_with_util(deps, &ProvenanceUtilImpl, info, register)
 }
 
+/// Registers a payable's uuid and scope with the contract with the following steps:
+/// - Charges the contract's configured fee for registration.
+/// - Refunds the registering entity if they provided too many funds.
+/// - Verifies that the related scope_id is owned by the sender.
+/// - Appends an attribute to the scope with all registered information under the contract's name.
+/// - Creates a link in local storage for scope_id and payable_uuid reverse lookups.
 pub fn register_payable_with_util<T: ProvenanceUtil>(
     deps: DepsMut<ProvenanceQuery>,
     provenance_util: &T,
@@ -77,7 +90,6 @@ pub fn register_payable_with_util<T: ProvenanceUtil>(
             ),
         ));
     }
-
     // If the sender's address is not listed as an owner address on the target scope for the payable,
     // then they are not authorized to register this payable.
     // Skip this step locally - creating a scope is an unnecessary piece of testing this
@@ -129,6 +141,7 @@ pub fn register_payable_with_util<T: ProvenanceUtil>(
         .add_attributes(attributes))
 }
 
+/// A helper struct that contains all output relevant to charging a fee for registration.
 struct FeeChargeResponse {
     fee_charge_message: Option<CosmosMsg<ProvenanceMsg>>,
     fee_refund_message: Option<CosmosMsg<ProvenanceMsg>>,
@@ -136,6 +149,8 @@ struct FeeChargeResponse {
     oracle_fee_amount_kept: u128,
 }
 
+/// Digests all relevant input and creates the appropriate fee messages (including an optional 
+/// refund to the sender if required).
 fn validate_fee_params_get_messages(
     info: &MessageInfo,
     state: &StateV2,

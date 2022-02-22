@@ -6,13 +6,20 @@ use provwasm_std::{
     add_json_attribute, delete_attributes, ProvenanceMsg, ProvenanceQuerier, ProvenanceQuery, Scope,
 };
 
+/// Defines a ProvenanceUtil instance.  This value should be used to query provenance modules or to
+/// generate messages utilizing provwasm helper functions.
 pub trait ProvenanceUtil {
+    /// Returns a provwasm Scope struct for the given scope_id, which is a bech32 address prefixed
+    /// with "scope"
     fn get_scope_by_id(
         &self,
         querier: &QuerierWrapper<ProvenanceQuery>,
         scope_id: impl Into<String>,
     ) -> StdResult<Scope>;
 
+    /// Derives a CosmosMsg<ProvenanceMsg> Custom wrapper that will add a PayableScopeAttribute to
+    /// a target scope.  The target scope should be defined by the scope_id value within the
+    /// PayableScopeAttribute parameter.
     fn get_add_initial_attribute_to_scope_msg(
         &self,
         deps: &Deps<ProvenanceQuery>,
@@ -20,6 +27,11 @@ pub trait ProvenanceUtil {
         contract_name: impl Into<String>,
     ) -> Result<CosmosMsg<ProvenanceMsg>, ContractError>;
 
+    /// Provwasm currently does not expose an "update attribute" functionality, so this function is
+    /// a placeholder that should delete all attributes listed until the provided contract_name, and
+    /// add a new attribute correlating to the json values of the provided PayableScopeAttribute.
+    /// The target scope should be defined by the scope_id value within the PayableScopeAttribute
+    /// parameter.
     fn upsert_attribute_to_scope(
         &self,
         attribute: &PayableScopeAttribute,
@@ -27,9 +39,13 @@ pub trait ProvenanceUtil {
     ) -> Result<WriteAttributeMessages, ContractError>;
 }
 
+/// The core production ProvenanceUtil instance.  A static struct instance for re-use throughout the
+/// various execution flows.
 pub struct ProvenanceUtilImpl;
 
 impl ProvenanceUtil for ProvenanceUtilImpl {
+    /// Simply generates a ProvenanceQuerier from the QuerierWrapper and invokes get_scope for the
+    /// given scope_id.
     fn get_scope_by_id(
         &self,
         querier: &QuerierWrapper<ProvenanceQuery>,
@@ -38,6 +54,8 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
         ProvenanceQuerier::new(querier).get_scope(scope_id)
     }
 
+    /// Checks to determine if the scope has already been registered with an attribute for this
+    /// contract.  If so, returns a ContractError.  If not, generates an add attribute message.
     fn get_add_initial_attribute_to_scope_msg(
         &self,
         deps: &Deps<ProvenanceQuery>,
@@ -53,6 +71,9 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
         super::provenance_util::get_add_attribute_to_scope_msg(attribute, contract_name)
     }
 
+    /// Forgoes validation on whether or not the scope exists, because the current attribute (if any)
+    /// on the scope will be deleted.  Generates a deletion and addition message, as the trait
+    /// documentation implies.
     fn upsert_attribute_to_scope(
         &self,
         attribute: &PayableScopeAttribute,
@@ -71,6 +92,8 @@ impl ProvenanceUtil for ProvenanceUtilImpl {
     }
 }
 
+/// Helper function to generate an "add attribute" message, as the functionality is re-used across
+/// multiple functions.
 fn get_add_attribute_to_scope_msg(
     attribute: &PayableScopeAttribute,
     contract_name: impl Into<String>,
@@ -87,11 +110,15 @@ fn get_add_attribute_to_scope_msg(
     .map_err(ContractError::Std)
 }
 
+/// Helper struct - contains both a delete and add attribute message for the response of
+/// upsert_attribute_to_scope in the ProvenanceUtil trait.
 pub struct WriteAttributeMessages {
     delete_attributes_msg: CosmosMsg<ProvenanceMsg>,
     add_attribute_msg: CosmosMsg<ProvenanceMsg>,
 }
 impl WriteAttributeMessages {
+    /// Helper function to convert both messages to a properly ordered Vec for easy insertion into
+    /// cosomwasm Response structs.
     pub fn to_vec(self) -> Vec<CosmosMsg<ProvenanceMsg>> {
         vec![self.delete_attributes_msg, self.add_attribute_msg]
     }

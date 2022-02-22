@@ -16,6 +16,9 @@ pub fn query_payable_binary_by_uuid(
     query_payable_binary_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, payable_uuid)?)
 }
 
+/// Finds the scope id by querying local storage for the payable uuid to scope id link, and then
+/// forks the functionality into the query by scope id functionality to derive the resulting
+/// deserialized PayableScopeAttribute.
 pub fn query_payable_attribute_by_uuid(
     deps: &Deps<ProvenanceQuery>,
     payable_uuid: impl Into<String>,
@@ -23,6 +26,9 @@ pub fn query_payable_attribute_by_uuid(
     query_payable_attribute_by_scope_id(deps, get_scope_id_for_payable_uuid(deps, payable_uuid)?)
 }
 
+/// Queries local storage for the contained payable uuid to scope id link and returns the resulting
+/// scope id, if present.  Otherwise, defaults to a Std contract error indicating the issue in
+/// storage load.
 fn get_scope_id_for_payable_uuid(
     deps: &Deps<ProvenanceQuery>,
     payable_uuid: impl Into<String>,

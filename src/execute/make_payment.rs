@@ -9,10 +9,13 @@ use crate::util::provenance_util::{ProvenanceUtil, ProvenanceUtilImpl};
 use cosmwasm_std::{coin, BankMsg, CosmosMsg, DepsMut, MessageInfo, Response};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 
+/// Contains all relevant fields required in order to make a payment for a payable.
 pub struct MakePaymentV1 {
     pub payable_uuid: String,
 }
 
+/// Parent function path for the contract to register a payable.  Ensures that the ProvenanceUtilImpl
+/// is the implementation used for this functionality outside of tests.
 pub fn make_payment(
     deps: DepsMut<ProvenanceQuery>,
     info: MessageInfo,
@@ -21,6 +24,13 @@ pub fn make_payment(
     make_payment_with_util(deps, &ProvenanceUtilImpl, info, make_payment)
 }
 
+/// Makes a payment on a registered payable with the following steps:
+/// - Verifies that the oracle has approved for the payable.
+/// - Verifies that the payable has been registered with the contract.
+/// - Verifies that all funds provided are in the denomination required by the payable.
+/// - Verifies that the funds provided are <= payable total owed, but > 0.
+/// - Subtracts the payment amount from the total amount owed on the scope attribute.
+/// - Sends the amount of funds provided to the value owner of the payable's scope.
 pub fn make_payment_with_util<T: ProvenanceUtil>(
     deps: DepsMut<ProvenanceQuery>,
     provenance_util: &T,
