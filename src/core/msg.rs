@@ -71,8 +71,6 @@ pub enum ExecuteMsg {
     MakePayment {
         payable_uuid: String,
     },
-    // TODO: remove this after the migration is complete
-    MigrateToScopeAddresses {},
 }
 impl ExecuteMsg {
     pub fn to_register_payable(self) -> Result<RegisterPayableV2, ContractError> {
@@ -138,18 +136,17 @@ impl ValidatedMsg for ExecuteMsg {
                 if payable_total.u128() == 0 {
                     invalid_fields.push("payable_total");
                 }
-            }
+            },
             ExecuteMsg::OracleApproval { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            }
+            },
             ExecuteMsg::MakePayment { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            }
-            ExecuteMsg::MigrateToScopeAddresses {} => (),
+            },
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
@@ -202,7 +199,7 @@ pub struct MigrateMsg {
     pub onboarding_denom: Option<String>,
     pub fee_collection_address: Option<String>,
     pub fee_percent: Option<Decimal>,
-    pub migrate_to_scope_attributes: Option<bool>,
+    pub is_local: Option<bool>,
 }
 impl ValidatedMsg for MigrateMsg {
     fn validate(&self) -> Result<(), ContractError> {
@@ -258,6 +255,7 @@ impl MigrateMsg {
             onboarding_denom: self.onboarding_denom,
             fee_collection_address,
             fee_percent: self.fee_percent,
+            is_local: self.is_local,
         })
     }
 }
@@ -433,7 +431,7 @@ mod tests {
             onboarding_denom: None,
             fee_collection_address: None,
             fee_percent: None,
-            migrate_to_scope_attributes: None,
+            is_local: None,
         }
         .validate()
         .expect("a migrate msg with no fields populated should pass validation");
@@ -542,7 +540,7 @@ mod tests {
             onboarding_denom: Some("nhash".to_string()),
             fee_collection_address: Some("address".to_string()),
             fee_percent: Some(Decimal::percent(50)),
-            migrate_to_scope_attributes: Some(true),
+            is_local: Some(false),
         }
     }
 

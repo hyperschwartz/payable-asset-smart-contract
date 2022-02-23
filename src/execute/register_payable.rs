@@ -134,8 +134,8 @@ pub fn register_payable_with_util<T: ProvenanceUtil>(
         payable_uuid: scope_attribute.payable_uuid,
         scope_id: scope_attribute.scope_id,
     };
-    payable_meta_storage_v2(deps.storage)
-        .save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
+    let mut meta_storage = payable_meta_storage_v2(deps.storage);
+    meta_storage.save(payable_meta.payable_uuid.as_bytes(), &payable_meta)?;
     Ok(Response::new()
         .add_messages(messages)
         .add_attributes(attributes))

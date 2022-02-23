@@ -4,7 +4,7 @@ use crate::execute::make_payment::make_payment;
 use crate::execute::oracle_approval::oracle_approval;
 use crate::execute::register_payable::register_payable;
 use crate::instantiate::init_contract::init_contract;
-use crate::migrate::migrate_contract::{migrate_contract, migrate_to_scope_attributes};
+use crate::migrate::migrate_contract::migrate_contract;
 use crate::query::query_payable_by_scope_id::query_payable_binary_by_scope_id;
 use crate::query::query_payable_by_uuid::query_payable_binary_by_uuid;
 use crate::query::query_state::query_state;
@@ -61,7 +61,6 @@ pub fn execute(
         }
         ExecuteMsg::OracleApproval { .. } => oracle_approval(deps, info, msg.to_oracle_approval()?),
         ExecuteMsg::MakePayment { .. } => make_payment(deps, info, msg.to_make_payment()?),
-        ExecuteMsg::MigrateToScopeAddresses {} => migrate_to_scope_attributes(deps),
     }
 }
 

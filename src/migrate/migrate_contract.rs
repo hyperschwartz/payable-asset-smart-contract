@@ -1,17 +1,13 @@
 use crate::core::error::ContractError;
-use crate::core::state::{
-    config, config_v2, payable_meta_storage_read, payable_meta_storage_v2, PayableMeta,
-    PayableMetaV2, PayableScopeAttribute, StateV2,
-};
+use crate::core::state::config_v2;
 use crate::migrate::version_info::{
     get_version_info, migrate_version_info, CONTRACT_NAME, CONTRACT_VERSION,
 };
 use crate::util::constants::{
     MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION, MIGRATION_STATE_CHANGE_PREFIX,
 };
-use crate::util::provenance_util::get_add_attribute_to_scope_msg;
 use cosmwasm_std::{
-    Addr, Attribute, CosmosMsg, Decimal, DepsMut, Order, Record, Response, StdResult, Storage,
+    Addr, Attribute, Decimal, DepsMut, Response, Storage,
     Uint128,
 };
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
@@ -27,6 +23,7 @@ pub struct MigrateContractV2 {
     pub onboarding_denom: Option<String>,
     pub fee_collection_address: Option<Addr>,
     pub fee_percent: Option<Decimal>,
+    pub is_local: Option<bool>,
 }
 impl MigrateContractV2 {
     /// Helper to derive an empty message for testing purposes.
@@ -36,6 +33,7 @@ impl MigrateContractV2 {
             onboarding_denom: None,
             fee_collection_address: None,
             fee_percent: None,
+            is_local: None,
         }
     }
 
@@ -46,6 +44,7 @@ impl MigrateContractV2 {
             || self.onboarding_denom.is_some()
             || self.fee_collection_address.is_some()
             || self.fee_percent.is_some()
+            || self.is_local.is_some()
     }
 }
 
@@ -85,6 +84,13 @@ pub fn migrate_contract(
                 &fee_percent.to_string(),
             ));
             state.fee_percent = fee_percent;
+        }
+        if let Some(local) = migrate.is_local {
+            attributes.push(state_change_attribute(
+                "is_local",
+                local.to_string(),
+            ));
+            state.is_local = local;
         }
         // Persist all changes to the state after modifying them within this block
         contract_config.save(&state)?;
@@ -133,71 +139,6 @@ fn check_valid_migration_versioning(storage: &mut dyn Storage) -> Result<(), Con
         .to_result();
     }
     Ok(())
-}
-
-/// This migration assumes that there is no state v1
-pub fn migrate_to_scope_attributes(
-    deps: DepsMut<ProvenanceQuery>,
-) -> Result<Response<ProvenanceMsg>, ContractError> {
-    let state_v1 = config(deps.storage).load()?;
-    let payable_type = state_v1.payable_type.clone();
-    let oracle_address = state_v1.oracle_address.clone();
-    let mut config_v2 = config_v2(deps.storage);
-    if config_v2.load().is_ok() {
-        return ContractError::InvalidMigration("state v2 found - no need to migrate".to_string())
-            .to_result();
-    }
-    let state_v2 = StateV2 {
-        contract_name: state_v1.contract_name,
-        onboarding_cost: state_v1.onboarding_cost,
-        onboarding_denom: state_v1.onboarding_denom,
-        fee_collection_address: state_v1.fee_collection_address,
-        fee_percent: state_v1.fee_percent,
-        is_local: state_v1.is_local,
-    };
-    // Store the new v2 state
-    config_v2.save(&state_v2)?;
-    let mut messages: Vec<CosmosMsg<ProvenanceMsg>> = vec![];
-    let mut meta_v2s: Vec<PayableMetaV2> = vec![];
-    // Migrate all values in local storage to their appropriate scope attributes
-    let attribute_storage_ids: Vec<Vec<u8>> = payable_meta_storage_read(deps.storage)
-        .range(None, None, Order::Ascending)
-        .map(|kv: StdResult<Record<PayableMeta>>| kv.unwrap().0)
-        .collect();
-    for storage_id in attribute_storage_ids {
-        let payable_meta = payable_meta_storage_read(deps.storage).load(&storage_id)?;
-        // Create a meta v2 that will store the uuid -> scope link for querying
-        let meta_v2 = PayableMetaV2 {
-            payable_uuid: payable_meta.payable_uuid.clone(),
-            scope_id: payable_meta.scope_id.clone(),
-        };
-        // Store the v2 in a vector for saving all at once. Don't want to partially migrate if an error occurs
-        meta_v2s.push(meta_v2);
-        let scope_attribute = PayableScopeAttribute {
-            payable_type: payable_type.clone(),
-            payable_uuid: payable_meta.payable_uuid,
-            scope_id: payable_meta.scope_id,
-            oracle_address: oracle_address.clone(),
-            payable_denom: payable_meta.payable_denom,
-            payable_total_owed: payable_meta.payable_total_owed,
-            payable_remaining_owed: payable_meta.payable_remaining_owed,
-            oracle_approved: payable_meta.oracle_approved,
-        };
-        // Create and push a message that will add a json attribute to the scope
-        messages.push(get_add_attribute_to_scope_msg(
-            &scope_attribute,
-            &state_v2.contract_name,
-        )?);
-    }
-    let save_count = meta_v2s.len().to_string();
-    for meta_v2 in meta_v2s {
-        payable_meta_storage_v2(deps.storage).save(meta_v2.payable_uuid.as_bytes(), &meta_v2)?;
-    }
-    let message_count = messages.len().to_string();
-    Ok(Response::new()
-        .add_messages(messages)
-        .add_attribute("payables_scope_attributes_added", message_count)
-        .add_attribute("payables_metadata_saved", save_count))
 }
 
 #[cfg(test)]
@@ -365,6 +306,7 @@ mod tests {
                 onboarding_denom: Some("dogecoin".to_string()),
                 fee_collection_address: Some(Addr::unchecked("new-fee-addr")),
                 fee_percent: Some(Decimal::percent(12)),
+                is_local: Some(true),
             },
         )
         .unwrap();
@@ -373,7 +315,7 @@ mod tests {
             "no messages should be sent on migrate"
         );
         assert_eq!(
-            6,
+            7,
             response.attributes.len(),
             "all migration attributes should be added because all fields were changed",
         );
@@ -416,6 +358,11 @@ mod tests {
             single_attribute_for_key(&response, MIGRATION_CONTRACT_VERSION),
             "the contract version attribute should be added correctly",
         );
+        assert_eq!(
+            "true",
+            single_attribute_for_key(&response, state_change_attr_name("is_local").as_str()),
+            "the is local attribute should be added correctly",
+        );
         let state = config_read_v2(deps.as_ref().storage)
             .load()
             .expect("state should load properly");
@@ -438,6 +385,11 @@ mod tests {
             Decimal::percent(12),
             state.fee_percent,
             "fee percent should be properly updated in the state",
+        );
+        assert_eq!(
+            true,
+            state.is_local,
+            "is local should be properly updated in the state",
         );
     }
 
