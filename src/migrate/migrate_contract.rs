@@ -6,10 +6,7 @@ use crate::migrate::version_info::{
 use crate::util::constants::{
     MIGRATION_CONTRACT_NAME, MIGRATION_CONTRACT_VERSION, MIGRATION_STATE_CHANGE_PREFIX,
 };
-use cosmwasm_std::{
-    Addr, Attribute, Decimal, DepsMut, Response, Storage,
-    Uint128,
-};
+use cosmwasm_std::{Addr, Attribute, Decimal, DepsMut, Response, Storage, Uint128};
 use provwasm_std::{ProvenanceMsg, ProvenanceQuery};
 use schemars::JsonSchema;
 use semver::Version;
@@ -86,10 +83,7 @@ pub fn migrate_contract(
             state.fee_percent = fee_percent;
         }
         if let Some(local) = migrate.is_local {
-            attributes.push(state_change_attribute(
-                "is_local",
-                local.to_string(),
-            ));
+            attributes.push(state_change_attribute("is_local", local.to_string()));
             state.is_local = local;
         }
         // Persist all changes to the state after modifying them within this block
@@ -387,8 +381,7 @@ mod tests {
             "fee percent should be properly updated in the state",
         );
         assert_eq!(
-            true,
-            state.is_local,
+            true, state.is_local,
             "is local should be properly updated in the state",
         );
     }

@@ -136,17 +136,17 @@ impl ValidatedMsg for ExecuteMsg {
                 if payable_total.u128() == 0 {
                     invalid_fields.push("payable_total");
                 }
-            },
+            }
             ExecuteMsg::OracleApproval { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            },
+            }
             ExecuteMsg::MakePayment { payable_uuid } => {
                 if payable_uuid.is_empty() {
                     invalid_fields.push("payable_uuid");
                 }
-            },
+            }
         };
         if !invalid_fields.is_empty() {
             ContractError::invalid_fields(invalid_fields).to_result()
